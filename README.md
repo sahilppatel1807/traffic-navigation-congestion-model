@@ -75,11 +75,11 @@ The model will record:
 
 ## Project status
 
-**Current stage:** model design and baseline implementation.
+**Current stage:** repository scaffolding. Simulation modules are not implemented yet; the next milestones add the network, vehicle, and simulation code.
 
-The first milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times. The next milestone is to add real-time route choice and a road-disruption scenario.
+The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times. The next milestone after that is to add real-time route choice and a road-disruption scenario.
 
-## Planned repository layout
+## Repository layout
 
 ```text
 src/            Simulation source code
@@ -88,6 +88,17 @@ results/        Generated data and figures
 tests/          Automated tests
 report/         Project report and supporting material
 ```
+
+## Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+pytest
+```
+
+At this stage, `pytest` runs a minimal smoke check that the `src` package imports. Model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
