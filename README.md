@@ -28,6 +28,18 @@ The model represents a road network as a graph:
 
 At each simulation time step, new vehicles enter the network, choose a route, travel along roads, and completed trips are recorded.
 
+The default topology is a small synthetic six-node corridor with two parallel paths:
+
+```text
+0 <----> 1 <----> 2
+^                   ^
+|                   |
+v                   v
+3 <----> 4 <----> 5
+```
+
+It is created by `src.network.create_default_network()` as a reproducible `networkx.DiGraph`. Two-way roads are represented explicitly as opposite directed edges. Each edge stores `free_flow_time`, `capacity`, `occupancy`, and `current_travel_time`. Time is measured in simulation steps; capacity and occupancy are vehicle counts. Use `src.network.summarize_network()` for a compact debug summary.
+
 ## Routing behaviours
 
 ### Uninformed routing
@@ -75,7 +87,7 @@ The model will record:
 
 ## Project status
 
-**Current stage:** repository scaffolding. Simulation modules are not implemented yet; the next milestones add the network, vehicle, and simulation code.
+**Current stage:** synthetic network topology implemented. Vehicle agents, congestion updates, routing policies, and the simulation clock are not implemented yet.
 
 The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times. The next milestone after that is to add real-time route choice and a road-disruption scenario.
 
@@ -98,7 +110,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs a minimal smoke check that the `src` package imports. Model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check and network topology tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
