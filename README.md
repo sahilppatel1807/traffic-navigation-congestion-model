@@ -40,6 +40,45 @@ v                   v
 
 It is created by `src.network.create_default_network()` as a reproducible `networkx.DiGraph`. Two-way roads are represented explicitly as opposite directed edges. Each edge stores `free_flow_time`, `capacity`, `occupancy`, and `current_travel_time`. Time is measured in simulation steps; capacity and occupancy are vehicle counts. Use `src.network.summarize_network()` for a compact debug summary.
 
+## Congestion model
+
+Road travel times are updated using the **Bureau of Public Roads (BPR)** formula:
+
+```
+t = t0 × (1 + α × (occupancy / capacity) ^ β)
+```
+
+| Symbol | Meaning | Default |
+|---|---|---|
+| `t0` | Free-flow travel time (simulation steps) | per edge |
+| `occupancy` | Vehicles currently on the road | per edge |
+| `capacity` | Design-capacity vehicle count | per edge |
+| `α` (`alpha`) | Sensitivity coefficient | `0.15` |
+| `β` (`beta`) | Shape exponent | `4.0` |
+
+At zero occupancy, `t` equals `t0` exactly. Travel time is non-decreasing as occupancy rises. At capacity (`occupancy == capacity`) the penalty is `+15%`; at twice capacity it reaches `+240%` with default parameters.
+
+### `src/congestion.py` — public API
+
+```python
+from src.congestion import (
+    DEFAULT_ALPHA,          # 0.15
+    DEFAULT_BETA,           # 4.0
+    calculate_travel_time,
+    update_road_travel_time,
+    update_all_travel_times,
+)
+```
+
+**`calculate_travel_time(free_flow_time, capacity, occupancy, alpha, beta) → float`**
+Pure BPR calculator. Raises `ValueError` for `capacity <= 0`, `occupancy < 0`, or `free_flow_time < 0`.
+
+**`update_road_travel_time(road, alpha, beta) → None`**
+Reads `free_flow_time`, `capacity`, and `occupancy` from a NetworkX edge-attribute `dict` and writes the result to `road["current_travel_time"]`.
+
+**`update_all_travel_times(graph, alpha, beta) → None`**
+Iterates over all edges of a `networkx.DiGraph` and calls `update_road_travel_time` on each. Call this after any step in which vehicle occupancy changes.
+
 ## Routing behaviours
 
 ### Uninformed routing
@@ -87,9 +126,9 @@ The model will record:
 
 ## Project status
 
-**Current stage:** synthetic network topology implemented. Vehicle agents, congestion updates, routing policies, and the simulation clock are not implemented yet.
+**Current stage:** synthetic network topology implemented; BPR congestion travel-time calculation implemented. Vehicle agents, routing policies, and the simulation clock are not implemented yet.
 
-The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times. The next milestone after that is to add real-time route choice and a road-disruption scenario.
+The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the congestion formula is now in place. The next milestone is to add vehicle agents and a simulation clock, followed by real-time route choice and a road-disruption scenario.
 
 ## Repository layout
 
@@ -110,7 +149,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check and network topology tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, and congestion calculation tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
