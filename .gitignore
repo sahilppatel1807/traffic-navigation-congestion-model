@@ -20,4 +20,6 @@ venv/
 # Generated outputs (keep folder tracked)
 results/*
 !results/.gitkeep
-.agents/
+.cursor/
+Explanation/
+spec_for_issue/
