@@ -79,6 +79,41 @@ Reads `free_flow_time`, `capacity`, and `occupancy` from a NetworkX edge-attribu
 **`update_all_travel_times(graph, alpha, beta) → None`**
 Iterates over all edges of a `networkx.DiGraph` and calls `update_road_travel_time` on each. Call this after any step in which vehicle occupancy changes.
 
+## Vehicle Agents
+
+Individual vehicles are represented as stateful agents that track their identity, trip parameters, and journey status while enforcing strict physical invariants.
+
+### `src/vehicle.py` — public API
+
+```python
+from src.vehicle import Vehicle
+```
+
+**`Vehicle(vehicle_id: str | int, origin: Any, destination: Any, start_time: int = 0)`**
+Pure constructor that initializes a vehicle.
+- Raises `TypeError` if `vehicle_id` is not a string or integer, or if `start_time` is not an integer.
+- Raises `ValueError` if `origin == destination` or if `start_time < 0`.
+- Sets initial journey state: `current_position` at `origin`, `route` to `None`, and `completion_time` to `None`.
+
+**`Vehicle.create_for_network(graph, vehicle_id, origin, destination, start_time=0) → Vehicle`**
+Factory classmethod that verifies that the `origin` and `destination` nodes exist in the NetworkX directed graph before constructing the vehicle. Raises `ValueError` if either node is missing.
+
+**`set_route(route: list[Any], graph: nx.DiGraph | None = None) -> None`**
+Sets the vehicle's planned path.
+- Raises `ValueError` if the route does not start at `origin` or end at `destination`.
+- If `graph` is provided, raises `ValueError` if any node in the route is not in `graph.nodes`.
+- Raises `ValueError` if the vehicle's `current_position` is not in the assigned route.
+
+**`update_position(node: Any, graph: nx.DiGraph | None = None) -> None`**
+Updates the vehicle's `current_position`.
+- If a route is assigned, raises `ValueError` if `node` is not part of the route.
+- If `graph` is provided, raises `ValueError` if `node` does not exist in `graph.nodes`.
+
+**`complete_journey(completion_time: int) -> None`**
+Marks the journey as complete and records the completion time-step.
+- Raises `TypeError` if `completion_time` is not an integer.
+- Raises `ValueError` if `completion_time` is less than `start_time` or if the vehicle is not currently at its `destination`.
+
 ## Routing behaviours
 
 ### Uninformed routing
@@ -126,9 +161,9 @@ The model will record:
 
 ## Project status
 
-**Current stage:** synthetic network topology implemented; BPR congestion travel-time calculation implemented. Vehicle agents, routing policies, and the simulation clock are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, and vehicle agents implemented. Routing policies and the simulation clock are not implemented yet.
 
-The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the congestion formula is now in place. The next milestone is to add vehicle agents and a simulation clock, followed by real-time route choice and a road-disruption scenario.
+The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, and vehicle modules are now in place. The next milestone is to add the simulation clock and vehicle movement, followed by real-time route choice and a road-disruption scenario.
 
 ## Repository layout
 
@@ -149,7 +184,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, and congestion calculation tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, and vehicle agent tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
