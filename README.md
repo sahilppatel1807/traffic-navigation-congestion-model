@@ -120,9 +120,22 @@ Marks the journey as complete and records the completion time-step.
 
 Drivers choose the shortest route using normal, uncongested road travel times. They do not receive live traffic updates.
 
+### `src/routing.py` — public API (static / uninformed)
+
+```python
+from src.routing import find_shortest_route
+```
+
+**`find_shortest_route(graph, origin, destination, weight="free_flow_time") → list`**
+Pure Dijkstra shortest path on a `networkx.DiGraph`. Returns an ordered node list from `origin` to `destination` inclusive — suitable for `Vehicle.set_route`. Does not mutate the graph or assign routes to vehicles.
+
+- Default `weight="free_flow_time"` implements **uninformed / static routing** (shortest path on free-flow times).
+- Optional `weight` (e.g. `"current_travel_time"`) is reserved for later selfish routing; every edge must carry the chosen attribute.
+- Raises `ValueError` if `origin` or `destination` is missing, if they are equal, or if no directed path exists.
+
 ### Selfish real-time routing
 
-Navigation-app users choose the route with the lowest *currently estimated personal travel time*. This is decentralised routing: every driver tries to minimise their own trip time.
+Navigation-app users choose the route with the lowest *currently estimated personal travel time*. This is decentralised routing: every driver tries to minimise their own trip time. Not implemented yet; the same `find_shortest_route` helper is intended to be reused with `weight="current_travel_time"`.
 
 ### Coordinated routing (extension)
 
@@ -161,9 +174,9 @@ The model will record:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, and vehicle agents implemented. Routing policies and the simulation clock are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, and static (uninformed) shortest-path routing are implemented. Selfish / coordinated routing policies and the simulation clock are not implemented yet.
 
-The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, and vehicle modules are now in place. The next milestone is to add the simulation clock and vehicle movement, followed by real-time route choice and a road-disruption scenario.
+The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, vehicle, and static-routing modules are now in place. The next milestone is to add the simulation clock and vehicle movement, followed by real-time route choice and a road-disruption scenario.
 
 ## Repository layout
 
@@ -184,7 +197,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, and vehicle agent tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, and static routing tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
