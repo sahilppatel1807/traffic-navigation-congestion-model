@@ -141,6 +141,25 @@ Navigation-app users choose the route with the lowest *currently estimated perso
 
 A central controller assigns or recommends routes to minimise total travel time across all vehicles. It may assign a car to a slightly slower route if that prevents a major bottleneck and improves network-wide performance.
 
+## Simulation clock and vehicle movement
+
+### `src/simulation.py` — public API
+
+```python
+from src.simulation import Simulation
+```
+
+**`Simulation(graph, vehicles)`**
+Constructs a discrete-time simulation from a directed road graph and a flat list of pre-built `Vehicle` agents. Public attributes: `graph`, `vehicles`, `current_step` (starts at `0`), `active` (in-transit only), and `completed`. Raises `ValueError` if any vehicle already has a non-`None` `completion_time`.
+
+**`step() → None`**
+Processes the current clock value then increments by one. Phase order: (1) enter vehicles due at `current_step` (auto-route with `free_flow_time` if needed; place onto first edge); (2) advance in-transit vehicles (consume dwell; leave/enter edges or complete); (3) refresh all edge travel times via BPR. Mutates state in place; returns `None`.
+
+**`run(until: int) → list[Vehicle]`**
+Executes up to `until` steps. Stops early when nothing is active and no remaining vehicle has `start_time >= current_step`. Returns the list of completed vehicles. Raises `ValueError` if `until < 1`.
+
+Edge dwell uses `max(1, ceil(current_travel_time))` ticks; the first tick is consumed in the same step a vehicle enters an edge from the release phase. Intermediate node transfers are instantaneous (leave previous edge and enter the next in the same advance) without cascading extra dwell ticks, so a free-flow edge of travel time `1` takes exactly one simulation step. In-transit timers are stored inside the simulation, not on the vehicle agent.
+
 ## Experimental design
 
 The following factors will be varied systematically:
@@ -174,9 +193,9 @@ The model will record:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, and static (uninformed) shortest-path routing are implemented. Selfish / coordinated routing policies and the simulation clock are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, and the discrete simulation clock with vehicle movement are implemented. Selfish / coordinated routing policies, demand generation, metrics, and road disruptions are not implemented yet.
 
-The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, vehicle, and static-routing modules are now in place. The next milestone is to add the simulation clock and vehicle movement, followed by real-time route choice and a road-disruption scenario.
+The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, vehicle, static-routing, and simulation-clock modules are now in place. The next milestones are real-time route choice, metrics aggregation, and a road-disruption scenario.
 
 ## Repository layout
 
@@ -197,7 +216,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, and static routing tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing tests, and simulation clock / vehicle movement tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
