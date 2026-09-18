@@ -160,6 +160,37 @@ Executes up to `until` steps. Stops early when nothing is active and no remainin
 
 Edge dwell uses `max(1, ceil(current_travel_time))` ticks; the first tick is consumed in the same step a vehicle enters an edge from the release phase. Intermediate node transfers are instantaneous (leave previous edge and enter the next in the same advance) without cascading extra dwell ticks, so a free-flow edge of travel time `1` takes exactly one simulation step. In-transit timers are stored inside the simulation, not on the vehicle agent.
 
+## Metrics
+
+Journey and network metrics read vehicle and graph state without mutating the simulation. Journey times use discrete simulation steps (`completion_time - start_time`). Road congestion is the directed-edge occupancy/capacity ratio, capped at `1.0`.
+
+### `src/metrics.py` — public API
+
+```python
+from src.metrics import (
+    journey_time,
+    completed_count,
+    mean_journey_time,
+    road_congestion,
+    simulation_summary,
+)
+```
+
+**`journey_time(vehicle) → int | None`**
+Returns `completion_time - start_time` in simulation steps. Incomplete vehicles (`completion_time is None`) return `None`. Raises `TypeError` / `ValueError` for malformed start or completion times.
+
+**`completed_count(vehicles) → int`**
+Counts vehicles with a non-`None` `completion_time`.
+
+**`mean_journey_time(vehicles) → float | None`**
+Mean of completed journey times only. Incomplete vehicles are excluded; returns `None` when none are complete.
+
+**`road_congestion(graph) → dict[tuple, float]`**
+Maps each directed edge `(u, v)` to `min(occupancy / capacity, 1.0)`. Raises `TypeError` / `ValueError` for invalid capacity or occupancy.
+
+**`simulation_summary(simulation) → dict`**
+Plain dictionary with keys `completed_count`, `mean_journey_time`, and `road_congestion`. Reads `simulation.vehicles` and `simulation.graph` without changing state.
+
 ## Experimental design
 
 The following factors will be varied systematically:
@@ -175,9 +206,14 @@ Each scenario will be repeated using multiple random seeds to account for stocha
 
 ## Measures
 
-The model will record:
+The model currently records (via `src/metrics.py`):
 
-- mean journey time;
+- completed journey count;
+- mean journey time (simulation steps; incomplete vehicles excluded); and
+- directed-road congestion ratios (occupancy/capacity, capped at `1.0`).
+
+Still planned for later issues:
+
 - median and 95th-percentile journey time;
 - total network delay;
 - road-level congestion over time;
@@ -193,9 +229,9 @@ The model will record:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, and the discrete simulation clock with vehicle movement are implemented. Selfish / coordinated routing policies, demand generation, metrics, and road disruptions are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, the discrete simulation clock with vehicle movement, and journey/network metrics are implemented. Selfish / coordinated routing policies, demand generation, and road disruptions are not implemented yet.
 
-The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, vehicle, static-routing, and simulation-clock modules are now in place. The next milestones are real-time route choice, metrics aggregation, and a road-disruption scenario.
+The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, vehicle, static-routing, simulation-clock, and metrics modules are now in place. The next milestones are real-time route choice, an experiments harness, and a road-disruption scenario.
 
 ## Repository layout
 
@@ -216,7 +252,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing tests, and simulation clock / vehicle movement tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing tests, simulation clock / vehicle movement tests, and journey/network metrics tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
