@@ -191,6 +191,31 @@ Maps each directed edge `(u, v)` to `min(occupancy / capacity, 1.0)`. Raises `Ty
 **`simulation_summary(simulation) → dict`**
 Plain dictionary with keys `completed_count`, `mean_journey_time`, and `road_congestion`. Reads `simulation.vehicles` and `simulation.graph` without changing state.
 
+## Network congestion visualisation
+
+Directed edges can be coloured by the same occupancy/capacity congestion ratios used in metrics. Colour is mapped on a fixed `[0.0, 1.0]` scale (`YlOrRd`) with a colourbar; opposing directions are drawn as offset strokes. The helper is read-only and does not mutate edge attributes.
+
+### `src/visualisation.py` — public API
+
+```python
+from src.visualisation import plot_network_congestion
+
+plot_network_congestion(graph, path, pos=None)
+```
+
+**`plot_network_congestion(graph, path, pos=None) → None`**
+Saves a PNG of the directed road graph coloured by congestion. Default node layout is the documented 2×3 grid for nodes `0`–`5`; pass `pos` for custom layouts. Uses the Agg matplotlib backend so figures can be written headlessly.
+
+### Generate the Week 9 demo figure
+
+From the repository root (after installing requirements):
+
+```bash
+python scripts/plot_network_congestion.py
+```
+
+This runs a short deterministic simulation that stacks seed vehicles on the top corridor so at least one edge is near capacity, then writes `results/network_congestion.png`.
+
 ## Experimental design
 
 The following factors will be varied systematically:
@@ -222,21 +247,22 @@ Still planned for later issues:
 
 ## Expected outputs
 
-- Network diagrams coloured by congestion level.
+- Network diagrams coloured by congestion level (see `scripts/plot_network_congestion.py` → `results/network_congestion.png`).
 - Time-series plots of congestion after a disruption.
 - Average travel time versus navigation-app adoption rate.
 - Comparisons of selfish and coordinated routing across demand levels.
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, the discrete simulation clock with vehicle movement, and journey/network metrics are implemented. Selfish / coordinated routing policies, demand generation, and road disruptions are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, the discrete simulation clock with vehicle movement, journey/network metrics, and network congestion visualisation are implemented. Selfish / coordinated routing policies, demand generation, and road disruptions are not implemented yet.
 
-The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, vehicle, static-routing, simulation-clock, and metrics modules are now in place. The next milestones are real-time route choice, an experiments harness, and a road-disruption scenario.
+The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, vehicle, static-routing, simulation-clock, metrics, and visualisation modules are now in place. The next milestones are real-time route choice, an experiments harness, and a road-disruption scenario.
 
 ## Repository layout
 
 ```text
 src/            Simulation source code
+scripts/        Deterministic demo / figure generation scripts
 notebooks/      Experiment analysis and visualisations
 results/        Generated data and figures
 tests/          Automated tests
@@ -252,7 +278,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing tests, simulation clock / vehicle movement tests, and journey/network metrics tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing tests, simulation clock / vehicle movement tests, journey/network metrics tests, and visualisation smoke tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
