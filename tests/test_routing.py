@@ -1,14 +1,10 @@
-"""Tests for static shortest-path routing."""
+"""Tests for static shortest-path routing and route-cost estimation."""
 
 import networkx as nx
 import pytest
 
 from src.network import create_default_network
-from src.routing import find_shortest_route
-
-
-def _path_cost(graph: nx.DiGraph, route: list, weight: str = "free_flow_time") -> float:
-    return sum(graph[u][v][weight] for u, v in zip(route, route[1:]))
+from src.routing import estimate_route_cost, find_shortest_route
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +33,7 @@ def test_default_network_route_cost_matches_networkx_shortest_path_length():
         graph, source=origin, target=destination, weight="free_flow_time"
     )
 
-    assert _path_cost(graph, route) == expected_length
+    assert estimate_route_cost(graph, route, weight="free_flow_time") == expected_length
 
 
 def test_route_is_pure_and_does_not_mutate_graph():
@@ -66,8 +62,8 @@ def test_weighted_graph_prefers_free_flow_cheapest_over_fewest_hops():
     route = find_shortest_route(graph, "A", "C")
 
     assert route == ["A", "B", "C"]
-    assert _path_cost(graph, route) == 2.0
-    assert _path_cost(graph, ["A", "C"]) == 10.0
+    assert estimate_route_cost(graph, route, weight="free_flow_time") == 2.0
+    assert estimate_route_cost(graph, ["A", "C"], weight="free_flow_time") == 10.0
 
 
 def test_custom_weight_parameter_uses_supplied_attribute():
@@ -80,7 +76,80 @@ def test_custom_weight_parameter_uses_supplied_attribute():
     route = find_shortest_route(graph, "A", "C", weight="current_travel_time")
 
     assert route == ["A", "C"]
-    assert _path_cost(graph, route, weight="current_travel_time") == 1.0
+    assert estimate_route_cost(graph, route) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# estimate_route_cost — Primary Seam
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_route_cost_default_weight_sums_current_travel_time():
+    graph = nx.DiGraph()
+    graph.add_edge("A", "B", current_travel_time=2.5, free_flow_time=1.0)
+    graph.add_edge("B", "C", current_travel_time=3.5, free_flow_time=1.0)
+
+    cost = estimate_route_cost(graph, ["A", "B", "C"])
+
+    assert isinstance(cost, float)
+    assert cost == 6.0
+
+
+def test_estimate_route_cost_custom_weight_sums_alternate_attribute():
+    graph = nx.DiGraph()
+    graph.add_edge("A", "B", current_travel_time=9.0, free_flow_time=1.0)
+    graph.add_edge("B", "C", current_travel_time=9.0, free_flow_time=2.0)
+
+    cost = estimate_route_cost(graph, ["A", "B", "C"], weight="free_flow_time")
+
+    assert isinstance(cost, float)
+    assert cost == 3.0
+
+
+def test_estimate_route_cost_is_pure_and_does_not_mutate_graph():
+    graph = nx.DiGraph()
+    graph.add_edge("A", "B", current_travel_time=2.0, occupancy=3)
+    graph.add_edge("B", "C", current_travel_time=4.0, occupancy=1)
+    edge_snapshot = {(u, v): dict(attrs) for u, v, attrs in graph.edges(data=True)}
+    node_snapshot = set(graph.nodes)
+
+    estimate_route_cost(graph, ["A", "B", "C"])
+
+    assert set(graph.nodes) == node_snapshot
+    assert {(u, v): dict(attrs) for u, v, attrs in graph.edges(data=True)} == edge_snapshot
+
+
+def test_estimate_route_cost_empty_route_raises_value_error():
+    graph = nx.DiGraph()
+    graph.add_edge("A", "B", current_travel_time=1.0)
+
+    with pytest.raises(ValueError, match="empty"):
+        estimate_route_cost(graph, [])
+
+
+def test_estimate_route_cost_single_node_route_raises_value_error():
+    graph = nx.DiGraph()
+    graph.add_node("A")
+
+    with pytest.raises(ValueError, match="at least two nodes"):
+        estimate_route_cost(graph, ["A"])
+
+
+def test_estimate_route_cost_missing_edge_raises_value_error():
+    graph = nx.DiGraph()
+    graph.add_edge("A", "B", current_travel_time=1.0)
+    # No A→C edge.
+
+    with pytest.raises(ValueError, match="no directed edge"):
+        estimate_route_cost(graph, ["A", "C"])
+
+
+def test_estimate_route_cost_missing_weight_raises_key_error():
+    graph = nx.DiGraph()
+    graph.add_edge("A", "B", free_flow_time=1.0)  # no current_travel_time
+
+    with pytest.raises(KeyError):
+        estimate_route_cost(graph, ["A", "B"])
 
 
 # ---------------------------------------------------------------------------
