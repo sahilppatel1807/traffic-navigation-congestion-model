@@ -120,10 +120,10 @@ Marks the journey as complete and records the completion time-step.
 
 Drivers choose the shortest route using normal, uncongested road travel times. They do not receive live traffic updates.
 
-### `src/routing.py` — public API (static / uninformed)
+### `src/routing.py` — public API (static / uninformed + route-cost)
 
 ```python
-from src.routing import find_shortest_route
+from src.routing import find_shortest_route, estimate_route_cost
 ```
 
 **`find_shortest_route(graph, origin, destination, weight="free_flow_time") → list`**
@@ -133,9 +133,16 @@ Pure Dijkstra shortest path on a `networkx.DiGraph`. Returns an ordered node lis
 - Optional `weight` (e.g. `"current_travel_time"`) is reserved for later selfish routing; every edge must carry the chosen attribute.
 - Raises `ValueError` if `origin` or `destination` is missing, if they are equal, or if no directed path exists.
 
+**`estimate_route_cost(graph, route, weight="current_travel_time") → float`**
+Pure sum of a named edge attribute along consecutive nodes of a planned route. Default `weight="current_travel_time"` scores the path under live congested travel times already stored on each directed edge. Does not mutate the graph and does not call BPR updaters — callers refresh travel times before asking for a live cost.
+
+- Optional `weight` (e.g. `"free_flow_time"`) lets the same helper sum other attributes in tests and experiments.
+- Raises `ValueError` for an empty route, a single-node route, or a missing directed edge between consecutive nodes.
+- A missing weight attribute on an existing edge surfaces as the raw `KeyError`.
+
 ### Selfish real-time routing
 
-Navigation-app users choose the route with the lowest *currently estimated personal travel time*. This is decentralised routing: every driver tries to minimise their own trip time. Not implemented yet; the same `find_shortest_route` helper is intended to be reused with `weight="current_travel_time"`.
+Navigation-app users choose the route with the lowest *currently estimated personal travel time*. This is decentralised routing: every driver tries to minimise their own trip time. Entry-time auto-routing under live weights is not wired yet; `find_shortest_route` with `weight="current_travel_time"` and `estimate_route_cost` provide the scoring / path seam for that milestone.
 
 ### Coordinated routing (extension)
 
@@ -296,9 +303,9 @@ Still planned for later issues:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Selfish / coordinated routing policies, a full experiments harness, and road disruptions are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Selfish entry routing / coordinated routing policies, a full experiments harness, and road disruptions are not implemented yet.
 
-The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are real-time route choice, an experiments harness, and a road-disruption scenario.
+The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are selfish real-time route choice at entry, an experiments harness, and a road-disruption scenario.
 
 ## Repository layout
 
@@ -320,7 +327,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing tests, simulation clock / vehicle movement tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing and route-cost estimation tests, simulation clock / vehicle movement tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
