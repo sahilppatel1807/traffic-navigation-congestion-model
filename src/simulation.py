@@ -7,7 +7,9 @@ updates edge occupancy, refreshes congested travel times, then advances the
 clock by one. :meth:`Simulation.run` drives the clock with a soft step cap.
 
 In-transit edge and remaining-dwell state live in a private simulation map —
-the vehicle agent remains a pure journey-state object.
+the vehicle agent remains a pure journey-state object. Edge dwell is taken from
+the travel time implied by vehicles already on the road; occupancy is then
+incremented so later simultaneous entrants see congestion.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from typing import Any
 
 import networkx as nx
 
-from src.congestion import update_all_travel_times
+from src.congestion import update_all_travel_times, update_road_travel_time
 from src.routing import find_shortest_route
 from src.vehicle import Vehicle
 
@@ -161,16 +163,24 @@ class Simulation:
     def _enter_edge(
         self, vehicle: Vehicle, u: Any, v: Any, *, route_idx: int
     ) -> None:
-        """Place ``vehicle`` onto directed edge ``u → v`` and set dwell."""
+        """Place ``vehicle`` onto directed edge ``u → v`` and set dwell.
+
+        Dwell uses the edge's travel time from vehicles **already** on the road
+        (excluding this entrant). Occupancy is then incremented and the edge
+        travel time refreshed so later simultaneous entrants see congestion.
+        """
         if not self.graph.has_edge(u, v):
             raise ValueError(
                 f"missing directed edge {u!r} → {v!r} on route for vehicle "
                 f"{vehicle.vehicle_id!r}"
             )
 
-        travel_time = self.graph[u][v]["current_travel_time"]
+        edge = self.graph[u][v]
+        update_road_travel_time(edge)
+        travel_time = edge["current_travel_time"]
         steps_remaining = max(1, math.ceil(travel_time))
-        self.graph[u][v]["occupancy"] += 1
+        edge["occupancy"] += 1
+        update_road_travel_time(edge)
         self._in_transit[vehicle] = (u, v, route_idx, steps_remaining)
 
     def _leave_edge(self, vehicle: Vehicle, u: Any, v: Any) -> None:

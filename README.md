@@ -158,7 +158,16 @@ Processes the current clock value then increments by one. Phase order: (1) enter
 **`run(until: int) → list[Vehicle]`**
 Executes up to `until` steps. Stops early when nothing is active and no remaining vehicle has `start_time >= current_step`. Returns the list of completed vehicles. Raises `ValueError` if `until < 1`.
 
-Edge dwell uses `max(1, ceil(current_travel_time))` ticks; the first tick is consumed in the same step a vehicle enters an edge from the release phase. Intermediate node transfers are instantaneous (leave previous edge and enter the next in the same advance) without cascading extra dwell ticks, so a free-flow edge of travel time `1` takes exactly one simulation step. In-transit timers are stored inside the simulation, not on the vehicle agent.
+Edge dwell uses ``max(1, ceil(current_travel_time))`` ticks taken from the
+edge's travel time **before** this vehicle is counted in occupancy, so the
+first entrant on an empty road sees free-flow while later simultaneous
+entrants see congestion. Occupancy is then incremented and the edge travel
+time refreshed. The first dwell tick is consumed in the same step a vehicle
+enters an edge from the release phase. Intermediate node transfers are
+instantaneous (leave previous edge and enter the next in the same advance)
+without cascading extra dwell ticks, so a free-flow edge of travel time ``1``
+takes exactly one simulation step. In-transit timers are stored inside the
+simulation, not on the vehicle agent.
 
 ## Metrics
 
@@ -190,6 +199,39 @@ Maps each directed edge `(u, v)` to `min(occupancy / capacity, 1.0)`. Raises `Ty
 
 **`simulation_summary(simulation) → dict`**
 Plain dictionary with keys `completed_count`, `mean_journey_time`, and `road_congestion`. Reads `simulation.vehicles` and `simulation.graph` without changing state.
+
+## Demand generation
+
+Baseline demand is a simultaneous corridor batch. Intensity is a single batch size `n` against the top-corridor capacity of 10. Named presets are **low = 1**, **medium = 5**, **high = 15**. Vehicles are returned bare (`route is None`, `start_time=0`); `Simulation` auto-routes on entry with free-flow weights.
+
+### `src/demand.py` — public API
+
+```python
+from src.demand import (
+    DEMAND_LOW, DEMAND_MEDIUM, DEMAND_HIGH,  # 1, 5, 15
+    DEMAND_LEVELS,
+    build_corridor_demand,
+    build_low_demand,
+    build_medium_demand,
+    build_high_demand,
+)
+```
+
+**`build_corridor_demand(graph, n, *, origin=0, destination=2) → list[Vehicle]`**
+Builds `n` bare vehicles for the corridor. Raises `TypeError` if `n` is not an integer; `ValueError` if `n < 1` or the OD nodes are missing.
+
+**`build_low_demand` / `build_medium_demand` / `build_high_demand`**
+Thin wrappers around the preset batch sizes.
+
+### Validate the baseline (low / medium / high)
+
+From the repository root (after installing requirements):
+
+```bash
+python scripts/validate_baseline_demand.py
+```
+
+This runs three static/uninformed scenarios (0% navigation-app adoption, no disruption) with horizon `until=100` and writes `results/baseline_demand_validation.csv` with columns `demand_level,n,completed_count,mean_journey_time`. Automated tests assert every vehicle completes, low-demand mean journey time equals free-flow **1**, and mean journey time rises strictly low < medium < high.
 
 ## Network congestion visualisation
 
@@ -254,9 +296,9 @@ Still planned for later issues:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, the discrete simulation clock with vehicle movement, journey/network metrics, and network congestion visualisation are implemented. Selfish / coordinated routing policies, demand generation, and road disruptions are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Selfish / coordinated routing policies, a full experiments harness, and road disruptions are not implemented yet.
 
-The first modelling milestone is a working simulation in which vehicles travel through a capacity-constrained network and rising demand produces rising travel times — the network, congestion, vehicle, static-routing, simulation-clock, metrics, and visualisation modules are now in place. The next milestones are real-time route choice, an experiments harness, and a road-disruption scenario.
+The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are real-time route choice, an experiments harness, and a road-disruption scenario.
 
 ## Repository layout
 
@@ -278,7 +320,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing tests, simulation clock / vehicle movement tests, journey/network metrics tests, and visualisation smoke tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing tests, simulation clock / vehicle movement tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
