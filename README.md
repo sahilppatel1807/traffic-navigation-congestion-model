@@ -89,14 +89,14 @@ Individual vehicles are represented as stateful agents that track their identity
 from src.vehicle import Vehicle
 ```
 
-**`Vehicle(vehicle_id: str | int, origin: Any, destination: Any, start_time: int = 0)`**
+**`Vehicle(vehicle_id: str | int, origin: Any, destination: Any, start_time: int = 0, uses_navigation_app: bool = False)`**
 Pure constructor that initializes a vehicle.
-- Raises `TypeError` if `vehicle_id` is not a string or integer, or if `start_time` is not an integer.
+- Raises `TypeError` if `vehicle_id` is not a string or integer, if `start_time` is not an integer, or if `uses_navigation_app` is not a real `bool` (integers and other truthy values are rejected).
 - Raises `ValueError` if `origin == destination` or if `start_time < 0`.
-- Sets initial journey state: `current_position` at `origin`, `route` to `None`, and `completion_time` to `None`.
+- Sets initial journey state: `current_position` at `origin`, `route` to `None`, `completion_time` to `None`, and `uses_navigation_app` (default `False` = uninformed).
 
-**`Vehicle.create_for_network(graph, vehicle_id, origin, destination, start_time=0) → Vehicle`**
-Factory classmethod that verifies that the `origin` and `destination` nodes exist in the NetworkX directed graph before constructing the vehicle. Raises `ValueError` if either node is missing.
+**`Vehicle.create_for_network(graph, vehicle_id, origin, destination, start_time=0, uses_navigation_app=False) → Vehicle`**
+Factory classmethod that verifies that the `origin` and `destination` nodes exist in the NetworkX directed graph before constructing the vehicle. Forwards `uses_navigation_app` to the constructor. Raises `ValueError` if either node is missing.
 
 **`set_route(route: list[Any], graph: nx.DiGraph | None = None) -> None`**
 Sets the vehicle's planned path.
@@ -130,7 +130,7 @@ from src.routing import find_shortest_route, estimate_route_cost
 Pure Dijkstra shortest path on a `networkx.DiGraph`. Returns an ordered node list from `origin` to `destination` inclusive — suitable for `Vehicle.set_route`. Does not mutate the graph or assign routes to vehicles.
 
 - Default `weight="free_flow_time"` implements **uninformed / static routing** (shortest path on free-flow times).
-- Optional `weight` (e.g. `"current_travel_time"`) is reserved for later selfish routing; every edge must carry the chosen attribute.
+- Optional `weight` (e.g. `"current_travel_time"`) is used by **selfish / navigation-app** entry auto-routing; every edge must carry the chosen attribute.
 - Raises `ValueError` if `origin` or `destination` is missing, if they are equal, or if no directed path exists.
 
 **`estimate_route_cost(graph, route, weight="current_travel_time") → float`**
@@ -142,7 +142,15 @@ Pure sum of a named edge attribute along consecutive nodes of a planned route. D
 
 ### Selfish real-time routing
 
-Navigation-app users choose the route with the lowest *currently estimated personal travel time*. This is decentralised routing: every driver tries to minimise their own trip time. Entry-time auto-routing under live weights is not wired yet; `find_shortest_route` with `weight="current_travel_time"` and `estimate_route_cost` provide the scoring / path seam for that milestone.
+Navigation-app users choose the route with the lowest *currently estimated personal travel time*. This is decentralised routing: every driver tries to minimise their own trip time.
+
+Per-vehicle flag `uses_navigation_app` (default `False`) controls entry auto-routing when no route is pre-assigned:
+- `False` → Dijkstra on `free_flow_time` (uninformed / static).
+- `True` → Dijkstra on live `current_travel_time` (selfish).
+
+The route chosen at entry stays fixed for the whole journey (no mid-trip re-routing in this milestone). A pre-assigned route always wins; the flag is unused for that vehicle’s entry. Same-step due vehicles are still routed then entered in list order, so later selfish entrants can see earlier occupancy and may choose different paths — simultaneous entry is not order-independent.
+
+Adoption-rate helpers that assign who uses the app (0–100% mixes) are not included yet.
 
 ### Coordinated routing (extension)
 
@@ -160,7 +168,7 @@ from src.simulation import Simulation
 Constructs a discrete-time simulation from a directed road graph and a flat list of pre-built `Vehicle` agents. Public attributes: `graph`, `vehicles`, `current_step` (starts at `0`), `active` (in-transit only), and `completed`. Raises `ValueError` if any vehicle already has a non-`None` `completion_time`.
 
 **`step() → None`**
-Processes the current clock value then increments by one. Phase order: (1) enter vehicles due at `current_step` (auto-route with `free_flow_time` if needed; place onto first edge); (2) advance in-transit vehicles (consume dwell; leave/enter edges or complete); (3) refresh all edge travel times via BPR. Mutates state in place; returns `None`.
+Processes the current clock value then increments by one. Phase order: (1) enter vehicles due at `current_step` (auto-route if needed — `free_flow_time` for uninformed vehicles, `current_travel_time` for `uses_navigation_app=True`; place onto first edge); (2) advance in-transit vehicles (consume dwell; leave/enter edges or complete); (3) refresh all edge travel times via BPR. Mutates state in place; returns `None`.
 
 **`run(until: int) → list[Vehicle]`**
 Executes up to `until` steps. Stops early when nothing is active and no remaining vehicle has `start_time >= current_step`. Returns the list of completed vehicles. Raises `ValueError` if `until < 1`.
@@ -303,9 +311,9 @@ Still planned for later issues:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Selfish entry routing / coordinated routing policies, a full experiments harness, and road disruptions are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Navigation-app adoption-rate helpers, mid-trip re-routing, coordinated routing, a full experiments harness, and road disruptions are not implemented yet.
 
-The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are selfish real-time route choice at entry, an experiments harness, and a road-disruption scenario.
+The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are adoption-rate mixing helpers, an experiments harness, and a road-disruption scenario.
 
 ## Repository layout
 
@@ -327,7 +335,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests, static routing and route-cost estimation tests, simulation clock / vehicle movement tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 

@@ -10,6 +10,11 @@ In-transit edge and remaining-dwell state live in a private simulation map —
 the vehicle agent remains a pure journey-state object. Edge dwell is taken from
 the travel time implied by vehicles already on the road; occupancy is then
 incremented so later simultaneous entrants see congestion.
+
+Entry auto-routing chooses Dijkstra weights from each vehicle's
+``uses_navigation_app`` flag (free-flow vs live congested travel time). Routes
+are locked at entry; same-step due vehicles are still routed then entered in
+list order, so later selfish entrants can see earlier occupancy.
 """
 
 from __future__ import annotations
@@ -141,11 +146,16 @@ class Simulation:
                 continue
 
             if vehicle.route is None:
+                weight = (
+                    "current_travel_time"
+                    if vehicle.uses_navigation_app
+                    else "free_flow_time"
+                )
                 route = find_shortest_route(
                     self.graph,
                     vehicle.origin,
                     vehicle.destination,
-                    weight="free_flow_time",
+                    weight=weight,
                 )
                 vehicle.set_route(route, self.graph)
 

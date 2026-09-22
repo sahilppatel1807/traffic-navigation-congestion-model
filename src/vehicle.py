@@ -20,6 +20,7 @@ class Vehicle:
         origin: Any,
         destination: Any,
         start_time: int = 0,
+        uses_navigation_app: bool = False,
     ) -> None:
         """Initialize a Vehicle agent.
 
@@ -33,12 +34,18 @@ class Vehicle:
             The ending node of the vehicle's journey.
         start_time:
             The discrete simulation time-step when the journey begins. Must be >= 0.
+        uses_navigation_app:
+            If ``True``, the simulation auto-routes this vehicle at entry using
+            live congested travel times; if ``False`` (default), free-flow
+            shortest paths are used. Ignored when a route is already assigned.
+            Must be a real ``bool`` (integers and other truthy values are rejected).
 
         Raises
         ------
         TypeError
             If ``vehicle_id`` is not a string or integer.
             If ``start_time`` is not an integer.
+            If ``uses_navigation_app`` is not a ``bool``.
         ValueError
             If ``origin == destination``.
             If ``start_time < 0``.
@@ -50,6 +57,11 @@ class Vehicle:
         if not isinstance(start_time, int) or isinstance(start_time, bool):
             raise TypeError(
                 f"start_time must be an integer, got {type(start_time).__name__}"
+            )
+        if not isinstance(uses_navigation_app, bool):
+            raise TypeError(
+                f"uses_navigation_app must be a bool, got "
+                f"{type(uses_navigation_app).__name__}"
             )
         if start_time < 0:
             raise ValueError(f"start_time must be >= 0, got {start_time}")
@@ -63,6 +75,7 @@ class Vehicle:
         self.origin = origin
         self.destination = destination
         self.start_time = start_time
+        self.uses_navigation_app = uses_navigation_app
 
         # Journey state
         self.current_position = origin
@@ -77,6 +90,7 @@ class Vehicle:
         origin: Any,
         destination: Any,
         start_time: int = 0,
+        uses_navigation_app: bool = False,
     ) -> Vehicle:
         """Create a Vehicle agent after validating that origin and destination exist in the network.
 
@@ -92,6 +106,8 @@ class Vehicle:
             The ending node. Must exist in ``graph.nodes``.
         start_time:
             The starting time-step. Defaults to 0.
+        uses_navigation_app:
+            Forwarded to the constructor. Defaults to ``False``.
 
         Returns
         -------
@@ -112,6 +128,7 @@ class Vehicle:
             origin=origin,
             destination=destination,
             start_time=start_time,
+            uses_navigation_app=uses_navigation_app,
         )
 
     def set_route(self, route: list[Any], graph: nx.DiGraph | None = None) -> None:
