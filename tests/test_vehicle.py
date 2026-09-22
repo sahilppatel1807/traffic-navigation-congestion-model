@@ -62,6 +62,28 @@ def test_vehicle_initial_state():
     assert v.current_position == "A"
     assert v.route is None
     assert v.completion_time is None
+    assert v.uses_navigation_app is False
+
+
+def test_uses_navigation_app_default_is_false():
+    v = Vehicle(vehicle_id="v1", origin="A", destination="B")
+    assert v.uses_navigation_app is False
+
+
+def test_uses_navigation_app_true_is_stored():
+    v = Vehicle(vehicle_id="v1", origin="A", destination="B", uses_navigation_app=True)
+    assert v.uses_navigation_app is True
+
+
+def test_uses_navigation_app_non_boolean_raises_type_error():
+    with pytest.raises(TypeError, match="uses_navigation_app must be a bool"):
+        Vehicle(vehicle_id="v1", origin="A", destination="B", uses_navigation_app=1)  # type: ignore
+
+    with pytest.raises(TypeError, match="uses_navigation_app must be a bool"):
+        Vehicle(vehicle_id="v1", origin="A", destination="B", uses_navigation_app=0)  # type: ignore
+
+    with pytest.raises(TypeError, match="uses_navigation_app must be a bool"):
+        Vehicle(vehicle_id="v1", origin="A", destination="B", uses_navigation_app="yes")  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +106,20 @@ def test_create_for_network_successful():
     assert v.destination == 4
     assert v.start_time == 2
     assert v.current_position == 1
+    assert v.uses_navigation_app is False
+
+
+def test_create_for_network_forwards_uses_navigation_app():
+    graph = create_default_network()
+    v = Vehicle.create_for_network(
+        graph=graph,
+        vehicle_id="nav",
+        origin=0,
+        destination=2,
+        uses_navigation_app=True,
+    )
+
+    assert v.uses_navigation_app is True
 
 
 def test_create_for_network_raises_for_non_existent_origin_or_destination():

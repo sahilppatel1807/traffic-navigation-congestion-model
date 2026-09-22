@@ -113,6 +113,89 @@ def test_unrouted_vehicle_is_auto_routed_on_entry():
     assert vehicle.route[-1] == 2
 
 
+def _diverging_weight_graph() -> nx.DiGraph:
+    """Hand-built graph where free-flow and live-time shortest paths differ.
+
+    Free-flow prefers A→B→C (cost 2) over direct A→C (cost 10).
+    Live travel times reverse that: A→C costs 1; A→B→C costs 10.
+    """
+    graph = nx.DiGraph()
+    graph.add_edge(
+        "A", "C",
+        free_flow_time=10.0,
+        capacity=10,
+        occupancy=0,
+        current_travel_time=1.0,
+    )
+    graph.add_edge(
+        "A", "B",
+        free_flow_time=1.0,
+        capacity=10,
+        occupancy=0,
+        current_travel_time=5.0,
+    )
+    graph.add_edge(
+        "B", "C",
+        free_flow_time=1.0,
+        capacity=10,
+        occupancy=0,
+        current_travel_time=5.0,
+    )
+    return graph
+
+
+def test_uninformed_auto_route_uses_free_flow_shortest_path():
+    graph = _diverging_weight_graph()
+    vehicle = Vehicle(
+        vehicle_id="uninformed",
+        origin="A",
+        destination="C",
+        start_time=0,
+        uses_navigation_app=False,
+    )
+    assert vehicle.route is None
+
+    sim = Simulation(graph, [vehicle])
+    sim.step()
+
+    assert vehicle.route == ["A", "B", "C"]
+
+
+def test_nav_app_auto_route_uses_live_travel_time_shortest_path():
+    graph = _diverging_weight_graph()
+    vehicle = Vehicle(
+        vehicle_id="nav",
+        origin="A",
+        destination="C",
+        start_time=0,
+        uses_navigation_app=True,
+    )
+    assert vehicle.route is None
+
+    sim = Simulation(graph, [vehicle])
+    sim.step()
+
+    assert vehicle.route == ["A", "C"]
+
+
+def test_pre_set_route_wins_over_nav_app_flag():
+    graph = _diverging_weight_graph()
+    vehicle = Vehicle(
+        vehicle_id="preset",
+        origin="A",
+        destination="C",
+        start_time=0,
+        uses_navigation_app=True,
+    )
+    forced = ["A", "B", "C"]
+    vehicle.set_route(forced, graph)
+
+    sim = Simulation(graph, [vehicle])
+    sim.step()
+
+    assert vehicle.route == forced
+
+
 def test_pre_routed_vehicle_keeps_caller_assigned_route():
     graph = create_default_network()
     vehicle = Vehicle(vehicle_id="pre", origin=0, destination=2, start_time=0)
