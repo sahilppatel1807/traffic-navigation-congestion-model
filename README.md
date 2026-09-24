@@ -220,7 +220,7 @@ simulation, not on the vehicle agent.
 
 ## Metrics
 
-Journey and network metrics read vehicle and graph state without mutating the simulation. Journey times use discrete simulation steps (`completion_time - start_time`). Road congestion is the directed-edge occupancy/capacity ratio, capped at `1.0`.
+Journey and network metrics read vehicle and graph state without mutating the simulation. Journey times use discrete simulation steps (`completion_time - start_time`). Road congestion for visualisation is the directed-edge occupancy/capacity ratio, capped at `1.0`. Recovery scoring uses a separate uncapped capacity-weighted network congestion score and pure helpers on a dense `C(t)` series; it does not schedule disruption/restore or claim integrated experiment validity.
 
 ### `src/metrics.py` — public API
 
@@ -231,6 +231,9 @@ from src.metrics import (
     mean_journey_time,
     road_congestion,
     simulation_summary,
+    network_congestion_score,
+    pre_disruption_congestion,
+    congestion_recovery,
 )
 ```
 
@@ -248,6 +251,15 @@ Maps each directed edge `(u, v)` to `min(occupancy / capacity, 1.0)`. Raises `Ty
 
 **`simulation_summary(simulation) → dict`**
 Plain dictionary with keys `completed_count`, `mean_journey_time`, and `road_congestion`. Reads `simulation.vehicles` and `simulation.graph` without changing state.
+
+**`network_congestion_score(graph) → float`**
+Uncapped capacity-weighted mean `sum(occupancy) / sum(capacity)` over open edges (closed/absent edges excluded). Returns `math.nan` when there are no open edges.
+
+**`pre_disruption_congestion(C, t_star, W) → float`**
+Mean of dense series `C` over the pre-disruption window `[t_star - W, t_star)`.
+
+**`congestion_recovery(C, t_star, t_r, W, K, horizon) → dict`**
+Threshold recovery on a dense `C` series after a disruption/restore pair. Computes `C_pre` via `pre_disruption_congestion`, sets `τ = 1.05 C_pre`, requires an excursion in `[t_star, t_r)`, and counts only post-restore `K`-streaks that confirm on or before the inclusive `horizon`. Callers supply `W` and `K` (recommended defaults `W = 4 T_corr`, `K = 2 T_corr` for a configuration-derived free-flow OD time `T_corr`). Invalid `t_r` or non-positive `C_pre` return `valid=False` with null derived fields; programming errors raise.
 
 ## Demand generation
 
@@ -325,15 +337,18 @@ Each scenario will be repeated using multiple random seeds to account for stocha
 The model currently records (via `src/metrics.py`):
 
 - completed journey count;
-- mean journey time (simulation steps; incomplete vehicles excluded); and
-- directed-road congestion ratios (occupancy/capacity, capped at `1.0`).
+- mean journey time (simulation steps; incomplete vehicles excluded);
+- directed-road congestion ratios (occupancy/capacity, capped at `1.0`); and
+- pure congestion-recovery helpers (`network_congestion_score`, `pre_disruption_congestion`, `congestion_recovery`) on synthetic or caller-built `C(t)` series.
+
+**Recovery status:** pure helpers are shipped and unit-tested. Integrated recovery experiment claims remain blocked until warm-up, continuous/multi-wave demand, and scheduled disrupt/restore exist. Batch-only demand runs should keep using journey metrics and must not report headline recovery time. Permanent disruptions without restore are undefined for this metric. Later restore semantics (for capacity cuts: restore stored `original_capacity`; for closures: reinsert edges with stored attrs and zero occupancy; instantaneous at `t_r`) are a dependency for integrated experiments, not implemented here.
 
 Still planned for later issues:
 
 - median and 95th-percentile journey time;
 - total network delay;
 - road-level congestion over time;
-- congestion recovery time after a disruption; and
+- journey-based recovery (secondary); and
 - the difference between individual and network-wide routing outcomes.
 
 ## Expected outputs
@@ -345,9 +360,9 @@ Still planned for later issues:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Mid-trip re-routing, coordinated routing, scheduled disruption / restore, recovery-time metrics, and a full experiments harness are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement, journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Mid-trip re-routing, coordinated routing, scheduled disruption / restore, continuous/multi-wave demand, wired recovery series collection, and a full experiments harness are not implemented yet.
 
-The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are optional scheduled disruption, restore/reopen, recovery metrics, and an experiments harness composing demand × adoption × disruption.
+The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are scheduled disruption/restore, continuous or multi-wave demand, wiring `C(t)` collection in runners, and an experiments harness composing demand × adoption × disruption.
 
 ## Repository layout
 
@@ -369,7 +384,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, navigation-app adoption assignment tests, reduced-road-capacity and full road-closure disruption tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, navigation-app adoption assignment tests, reduced-road-capacity and full road-closure disruption tests, journey/network metrics tests (including pure congestion-recovery helpers on synthetic series), visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 

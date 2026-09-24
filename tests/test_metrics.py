@@ -1,12 +1,18 @@
 """Tests for journey-level and road-level metrics."""
 
+import math
+
 import networkx as nx
 import pytest
 
 from src.metrics import (
+    RECOVERY_THRESHOLD_FACTOR,
     completed_count,
+    congestion_recovery,
     journey_time,
     mean_journey_time,
+    network_congestion_score,
+    pre_disruption_congestion,
     road_congestion,
     simulation_summary,
 )
@@ -217,3 +223,263 @@ def test_simulation_summary_with_incomplete_and_complete_mix():
 
     assert completed_count([finished, pending]) == 1
     assert mean_journey_time([finished, pending]) == 5.0
+
+
+# ---------------------------------------------------------------------------
+# network_congestion_score — uncapped capacity-weighted mean
+# ---------------------------------------------------------------------------
+
+
+def test_network_congestion_score_matches_hand_computed_weighted_mean():
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, capacity=10, occupancy=5)
+    graph.add_edge(1, 2, capacity=5, occupancy=5)
+    # Hand: (5 + 5) / (10 + 5) = 10/15
+    assert network_congestion_score(graph) == pytest.approx(10 / 15)
+
+
+def test_network_congestion_score_uncapped_above_one():
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, capacity=4, occupancy=10)
+    graph.add_edge(1, 2, capacity=6, occupancy=0)
+    # Combined: 10 / 10 = 1.0
+    assert network_congestion_score(graph) == pytest.approx(1.0)
+
+    graph2 = nx.DiGraph()
+    graph2.add_edge(0, 1, capacity=4, occupancy=10)
+    assert network_congestion_score(graph2) == pytest.approx(2.5)
+    # Visualisation/capped road_congestion stays at 1.0 on the same edge.
+    assert road_congestion(graph2)[(0, 1)] == 1.0
+
+
+def test_network_congestion_score_excludes_absent_closed_edges():
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, capacity=10, occupancy=2)
+    graph.add_edge(1, 2, capacity=10, occupancy=8)
+    # Closing removes the edge from the graph — score uses remaining open edges.
+    graph.remove_edge(1, 2)
+    assert network_congestion_score(graph) == pytest.approx(0.2)
+
+
+def test_network_congestion_score_nan_when_no_open_edges():
+    graph = nx.DiGraph()
+    graph.add_node(0)
+    assert math.isnan(network_congestion_score(graph))
+
+
+# ---------------------------------------------------------------------------
+# pre_disruption_congestion — window mean
+# ---------------------------------------------------------------------------
+
+
+def test_pre_disruption_congestion_window_mean():
+    # indices: 0 1 2 3 4 5 6
+    C = [0.1, 0.2, 0.3, 0.4, 0.5, 0.9, 0.8]
+    t_star, W = 5, 3
+    # Window [2, 5): 0.3, 0.4, 0.5 → mean 0.4
+    assert pre_disruption_congestion(C, t_star, W) == pytest.approx(0.4)
+
+
+def test_pre_disruption_congestion_raises_for_bad_window_params():
+    C = [0.2, 0.2, 0.2, 0.2]
+    with pytest.raises(ValueError, match="W"):
+        pre_disruption_congestion(C, t_star=2, W=0)
+    with pytest.raises(ValueError, match="t_star"):
+        pre_disruption_congestion(C, t_star=-1, W=1)
+    with pytest.raises(ValueError, match="t_star"):
+        pre_disruption_congestion(C, t_star=1, W=2)
+    with pytest.raises(ValueError, match="pre-disruption window"):
+        pre_disruption_congestion([0.2, 0.2], t_star=3, W=2)
+
+
+# ---------------------------------------------------------------------------
+# congestion_recovery — primary seam (synthetic series)
+# ---------------------------------------------------------------------------
+
+
+def test_congestion_recovery_happy_path_post_restore_streak():
+    # C_pre window [0,4): all 1.0 → C_pre=1.0, tau=1.05
+    # t*=4, t_r=7, K=2, H=12
+    # Excursion in [4,7): C[4]=1.2, C[5]=1.3, C[6]=1.1
+    # Post-restore: C[7]=1.2 (still high), C[8]=1.0, C[9]=1.0 → streak at 8
+    C = [
+        1.0, 1.0, 1.0, 1.0,  # 0..3 pre
+        1.2, 1.3, 1.1,  # 4..6 disrupted
+        1.2, 1.0, 1.0, 1.0, 1.0, 1.0,  # 7..12
+    ]
+    result = congestion_recovery(C, t_star=4, t_r=7, W=4, K=2, horizon=12)
+
+    assert result["valid"] is True
+    assert result["invalid_reason"] is None
+    assert result["recovered"] is True
+    assert result["no_excursion"] is False
+    assert result["censored"] is False
+    assert result["C_pre"] == pytest.approx(1.0)
+    assert result["tau"] == pytest.approx(RECOVERY_THRESHOLD_FACTOR)
+    assert result["excursion_start"] == 4
+    assert result["recovery_start"] == 8
+    assert result["confirmation_time"] == 9
+    assert result["recovery_time"] == 4  # 8 - 4
+    assert result["censor_time"] is None
+    assert result["t_star"] == 4
+    assert result["t_r"] == 7
+    assert result["K"] == 2
+    assert result["W"] == 4
+    assert result["horizon"] == 12
+
+
+def test_congestion_recovery_confirmation_exactly_at_horizon():
+    # Inclusive horizon: streak start=9, K=2 → confirmation=10 == H.
+    C = [
+        1.0, 1.0, 1.0, 1.0,
+        1.2, 1.2, 1.2,
+        1.2, 1.2, 1.0, 1.0,
+    ]
+    result = congestion_recovery(C, t_star=4, t_r=7, W=4, K=2, horizon=10)
+
+    assert result["recovered"] is True
+    assert result["recovery_start"] == 9
+    assert result["confirmation_time"] == 10
+    assert result["recovery_time"] == 5
+    assert result["censored"] is False
+
+
+def test_congestion_recovery_no_excursion_in_disrupted_interval():
+    # Pre window all 1.0 → tau=1.05; disrupted interval stays at 1.0
+    C = [
+        1.0, 1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0,  # [4,7) never > tau
+        1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+    ]
+    result = congestion_recovery(C, t_star=4, t_r=7, W=4, K=2, horizon=12)
+
+    assert result["valid"] is True
+    assert result["no_excursion"] is True
+    assert result["recovered"] is False
+    assert result["censored"] is False
+    assert result["recovery_time"] is None
+    assert result["recovery_start"] is None
+    assert result["confirmation_time"] is None
+    assert result["excursion_start"] is None
+    assert result["censor_time"] is None
+    assert result["tau"] == pytest.approx(1.05)
+    assert result["C_pre"] == pytest.approx(1.0)
+
+
+def test_congestion_recovery_no_excursion_when_restore_equals_disruption():
+    # Zero-width disrupted interval [t*, t*) cannot contain an excursion.
+    C = [1.0, 1.0, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0, 1.0]
+    result = congestion_recovery(C, t_star=4, t_r=4, W=4, K=2, horizon=8)
+
+    assert result["valid"] is True
+    assert result["no_excursion"] is True
+    assert result["recovered"] is False
+    assert result["censored"] is False
+    assert result["excursion_start"] is None
+    assert result["recovery_time"] is None
+
+
+def test_congestion_recovery_ignores_pre_restore_streak():
+    # Excursion at t*=4; then C drops below tau before restore — must ignore.
+    # Qualifying streak only after t_r=7.
+    C = [
+        1.0, 1.0, 1.0, 1.0,
+        1.2, 1.0, 1.0,  # excursion then pre-restore streak at 5..6
+        1.0, 1.0, 0.9, 0.9, 0.9, 0.9,
+    ]
+    result = congestion_recovery(C, t_star=4, t_r=7, W=4, K=2, horizon=12)
+
+    assert result["recovered"] is True
+    assert result["excursion_start"] == 4
+    assert result["recovery_start"] == 7  # not 5
+    assert result["confirmation_time"] == 8
+    assert result["recovery_time"] == 3
+
+
+def test_congestion_recovery_censored_when_streak_confirms_after_horizon():
+    # K=3; keep C > tau through horizon so no streak fits.
+    C = [
+        1.0, 1.0, 1.0, 1.0,
+        1.2, 1.2, 1.2,
+        1.2, 1.2, 1.2, 1.2,
+    ]
+    result = congestion_recovery(C, t_star=4, t_r=7, W=4, K=3, horizon=10)
+
+    assert result["valid"] is True
+    assert result["recovered"] is False
+    assert result["censored"] is True
+    assert result["recovery_time"] is None
+    assert result["recovery_start"] is None
+    assert result["confirmation_time"] is None
+    assert result["censor_time"] == 6  # 10 - 4
+    assert result["no_excursion"] is False
+    assert result["excursion_start"] == 4
+
+
+def test_congestion_recovery_partial_end_streak_does_not_count():
+    # K=3, H=10; C drops only at 9..10 (two steps) — cannot confirm.
+    C = [
+        1.0, 1.0, 1.0, 1.0,
+        1.2, 1.2, 1.2,
+        1.2, 1.2, 1.0, 1.0,
+    ]
+    result = congestion_recovery(C, t_star=4, t_r=7, W=4, K=3, horizon=10)
+
+    assert result["censored"] is True
+    assert result["recovered"] is False
+    assert result["recovery_time"] is None
+    assert result["censor_time"] == 6
+
+
+def test_congestion_recovery_invalid_restore_time():
+    C = [1.0] * 13
+    for bad_t_r in (3, 13, -1, 7.0, None, True):  # out of range / non-int
+        result = congestion_recovery(C, t_star=4, t_r=bad_t_r, W=4, K=2, horizon=12)  # type: ignore[arg-type]
+        assert result["valid"] is False
+        assert result["invalid_reason"] == "invalid_restore_time"
+        assert result["recovered"] is False
+        assert result["censored"] is False
+        assert result["no_excursion"] is False
+        assert result["tau"] is None
+        assert result["recovery_time"] is None
+        assert result["recovery_start"] is None
+        assert result["confirmation_time"] is None
+        assert result["censor_time"] is None
+        assert result["C_pre"] is None
+        assert result["t_r"] == bad_t_r
+
+
+def test_congestion_recovery_non_positive_pre_disruption():
+    # Window of zeros → C_pre=0
+    C = [0.0, 0.0, 0.0, 0.0, 1.2, 1.2, 1.0, 1.0, 1.0]
+    result = congestion_recovery(C, t_star=4, t_r=6, W=4, K=2, horizon=8)
+
+    assert result["valid"] is False
+    assert result["invalid_reason"] == "non_positive_pre_disruption_congestion"
+    assert result["C_pre"] == pytest.approx(0.0)
+    assert result["tau"] is None
+    assert result["recovery_time"] is None
+    assert result["recovery_start"] is None
+    assert result["confirmation_time"] is None
+    assert result["censor_time"] is None
+    assert result["recovered"] is False
+    assert result["censored"] is False
+    assert result["no_excursion"] is False
+
+
+def test_congestion_recovery_raises_for_bad_parameters():
+    C = [1.0] * 13
+    with pytest.raises(ValueError, match="K"):
+        congestion_recovery(C, t_star=4, t_r=7, W=4, K=0, horizon=12)
+    with pytest.raises(ValueError, match="t_star"):
+        congestion_recovery(C, t_star=-1, t_r=7, W=4, K=2, horizon=12)
+    with pytest.raises(ValueError, match="W"):
+        congestion_recovery(C, t_star=4, t_r=7, W=0, K=2, horizon=12)
+    with pytest.raises(ValueError, match="t_star"):
+        congestion_recovery(C, t_star=3, t_r=7, W=4, K=2, horizon=12)
+    with pytest.raises(ValueError, match="horizon"):
+        congestion_recovery([1.0] * 12, t_star=4, t_r=7, W=4, K=2, horizon=12)
+    with pytest.raises(TypeError, match="Sequence"):
+        congestion_recovery({0: 1.0}, t_star=4, t_r=7, W=4, K=2, horizon=12)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="Sequence"):
+        congestion_recovery("not-a-series", t_star=4, t_r=7, W=4, K=2, horizon=12)  # type: ignore[arg-type]
