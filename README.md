@@ -150,7 +150,20 @@ Per-vehicle flag `uses_navigation_app` (default `False`) controls entry auto-rou
 
 The route chosen at entry stays fixed for the whole journey (no mid-trip re-routing in this milestone). A pre-assigned route always wins; the flag is unused for that vehicle’s entry. Same-step due vehicles are still routed then entered in list order, so later selfish entrants can see earlier occupancy and may choose different paths — simultaneous entry is not order-independent.
 
-Adoption-rate helpers that assign who uses the app (0–100% mixes) are not included yet.
+### Navigation-app adoption rates
+
+`src/adoption.py` assigns who uses the app on an existing vehicle list for a given adoption fraction. Demand builders stay at default uninformed fleets; call the helper after building demand when you need a mixed fleet.
+
+```python
+from src.adoption import ADOPTION_RATES, assign_navigation_adoption
+
+ADOPTION_RATES  # (0.0, 0.25, 0.5, 0.75, 1.0) — planned experiment fractions
+```
+
+**`assign_navigation_adoption(vehicles, rate, *, seed) → list[Vehicle]`**
+- `rate`: fraction in `[0.0, 1.0]` (`int` or `float`, including `0` / `1`); rejects `bool`; out of range → `ValueError`.
+- `seed`: required keyword-only integer; rejects `bool` and non-integers → `TypeError`.
+- Overwrites every vehicle’s `uses_navigation_app` flag. Exactly `k = round(n * rate)` vehicles are set to `True` (Python banker’s rounding — e.g. `n=5`, `rate=0.5` → `k=2`). Selection is a seeded shuffle of indices (exact count, not Bernoulli). Mutates the list in place and returns the same list object. An empty list is a no-op.
 
 ### Coordinated routing (extension)
 
@@ -311,9 +324,9 @@ Still planned for later issues:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Navigation-app adoption-rate helpers, mid-trip re-routing, coordinated routing, a full experiments harness, and road disruptions are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Mid-trip re-routing, coordinated routing, a full experiments harness, and road disruptions are not implemented yet.
 
-The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are adoption-rate mixing helpers, an experiments harness, and a road-disruption scenario.
+The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are an experiments harness (iterating `ADOPTION_RATES`) and a road-disruption scenario.
 
 ## Repository layout
 
@@ -335,7 +348,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, navigation-app adoption assignment tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
