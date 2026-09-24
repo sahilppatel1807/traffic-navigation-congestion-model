@@ -24,7 +24,7 @@ The model represents a road network as a graph:
 - **Edges** represent roads with a free-flow travel time and capacity.
 - **Vehicles** are individual agents with an origin, destination, route, and travel time.
 - Road travel times increase as the number of vehicles approaches or exceeds capacity.
-- A disruption is represented by reducing the capacity of a road or closing it.
+- A disruption is represented by reducing the capacity of a road (via `src.disruption.reduce_road_capacity`) or closing it (closure helper not implemented yet).
 
 At each simulation time step, new vehicles enter the network, choose a route, travel along roads, and completed trips are recorded.
 
@@ -164,6 +164,21 @@ ADOPTION_RATES  # (0.0, 0.25, 0.5, 0.75, 1.0) — planned experiment fractions
 - `rate`: fraction in `[0.0, 1.0]` (`int` or `float`, including `0` / `1`); rejects `bool`; out of range → `ValueError`.
 - `seed`: required keyword-only integer; rejects `bool` and non-integers → `TypeError`.
 - Overwrites every vehicle’s `uses_navigation_app` flag. Exactly `k = round(n * rate)` vehicles are set to `True` (Python banker’s rounding — e.g. `n=5`, `rate=0.5` → `k=2`). Selection is a seeded shuffle of indices (exact count, not Bernoulli). Mutates the list in place and returns the same list object. An empty list is a no-op.
+
+### Reduced road-capacity disruption
+
+`src/disruption.py` scales design capacity on both directions of a physical road and immediately refreshes those edges’ travel times. Callers apply the cut before a run or between steps; there is no simulation-scheduled disruption API yet. Road closure, restore/`original_capacity`, and exported factor presets are deferred.
+
+```python
+from src.disruption import reduce_road_capacity
+
+reduce_road_capacity(graph, u, v, *, factor)
+```
+
+**`reduce_road_capacity(graph, u, v, *, factor) → DiGraph`**
+- `factor`: remaining-capacity fraction in `(0.0, 1.0]` (`int` or `float`, including integer `1`); rejects `bool`; out of range or `<= 0` → `ValueError`.
+- Requires both directed edges `(u, v)` and `(v, u)` with numeric `capacity > 0` on each; missing edge → `ValueError`; non-numeric capacity → `TypeError`; non-positive capacity → `ValueError`.
+- Multiplies each direction’s current capacity by `factor` (float product, no rounding); leaves `occupancy` unchanged; refreshes `current_travel_time` on both edges via `update_road_travel_time`. Mutates the graph in place and returns the same object. Re-applying compounds on current capacity.
 
 ### Coordinated routing (extension)
 
@@ -324,9 +339,9 @@ Still planned for later issues:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Mid-trip re-routing, coordinated routing, a full experiments harness, and road disruptions are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), the discrete simulation clock with vehicle movement, journey/network metrics, network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Mid-trip re-routing, coordinated routing, road closure, recovery-time metrics, and a full experiments harness are not implemented yet.
 
-The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are an experiments harness (iterating `ADOPTION_RATES`) and a road-disruption scenario.
+The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are road closure, optional scheduled disruption, recovery metrics, and an experiments harness composing demand × adoption × disruption.
 
 ## Repository layout
 
@@ -348,7 +363,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, navigation-app adoption assignment tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, navigation-app adoption assignment tests, reduced-road-capacity disruption tests, journey/network metrics tests, visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
