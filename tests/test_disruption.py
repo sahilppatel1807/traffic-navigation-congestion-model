@@ -1,10 +1,10 @@
-"""Tests for the reduced-road-capacity disruption helper."""
+"""Tests for road-disruption helpers (capacity cut and full closure)."""
 
 import networkx as nx
 import pytest
 
 from src.congestion import calculate_travel_time
-from src.disruption import reduce_road_capacity
+from src.disruption import close_road, reduce_road_capacity
 from src.network import create_default_network
 
 
@@ -186,3 +186,82 @@ def test_validation_fails_before_writing():
 def test_missing_factor_raises_type_error():
     with pytest.raises(TypeError):
         reduce_road_capacity(_tiny_two_way(), 0, 1)  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# Primary seam — close_road
+# ---------------------------------------------------------------------------
+
+
+def test_close_road_removes_both_directions():
+    graph = _tiny_two_way()
+    result = close_road(graph, 0, 1)
+
+    assert result is graph
+    assert not graph.has_edge(0, 1)
+    assert not graph.has_edge(1, 0)
+
+
+def test_close_road_leaves_nodes():
+    graph = _tiny_two_way()
+    close_road(graph, 0, 1)
+
+    assert set(graph.nodes) == {0, 1}
+
+
+def test_close_road_default_network_pair():
+    graph = create_default_network()
+    assert graph.has_edge(0, 1)
+    assert graph.has_edge(1, 0)
+
+    close_road(graph, 0, 1)
+
+    assert not graph.has_edge(0, 1)
+    assert not graph.has_edge(1, 0)
+    assert 0 in graph and 1 in graph
+
+
+def test_close_road_missing_opposite_edge_raises_unchanged():
+    graph = nx.DiGraph()
+    graph.add_nodes_from([0, 1])
+    graph.add_edge(
+        0,
+        1,
+        free_flow_time=1.0,
+        capacity=10,
+        occupancy=0,
+        current_travel_time=1.0,
+    )
+
+    with pytest.raises(ValueError, match="missing directed edge"):
+        close_road(graph, 0, 1)
+
+    assert graph.has_edge(0, 1)
+    assert not graph.has_edge(1, 0)
+
+
+def test_close_road_missing_forward_edge_raises_unchanged():
+    graph = nx.DiGraph()
+    graph.add_nodes_from([0, 1])
+    graph.add_edge(
+        1,
+        0,
+        free_flow_time=1.0,
+        capacity=10,
+        occupancy=0,
+        current_travel_time=1.0,
+    )
+
+    with pytest.raises(ValueError, match="missing directed edge"):
+        close_road(graph, 0, 1)
+
+    assert graph.has_edge(1, 0)
+    assert not graph.has_edge(0, 1)
+
+
+def test_close_road_twice_raises():
+    graph = _tiny_two_way()
+    close_road(graph, 0, 1)
+
+    with pytest.raises(ValueError, match="missing directed edge"):
+        close_road(graph, 0, 1)

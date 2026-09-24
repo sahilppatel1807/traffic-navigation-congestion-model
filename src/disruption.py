@@ -1,8 +1,9 @@
 """Road-disruption helpers for experiment scenarios.
 
-This module applies physical-road capacity cuts without owning the simulation
-clock or experiment harness. Callers may invoke helpers before a run or between
-steps; travel times on affected edges are refreshed via the congestion updater.
+This module applies physical-road capacity cuts and full closures without
+owning the simulation clock or experiment harness. Callers may invoke helpers
+before a run or between steps. Capacity cuts refresh travel times on affected
+edges via the congestion updater; closures remove edges and do not refresh.
 """
 
 from __future__ import annotations
@@ -10,6 +11,44 @@ from __future__ import annotations
 import networkx as nx
 
 from src.congestion import update_road_travel_time
+
+
+def close_road(graph: nx.DiGraph, u, v) -> nx.DiGraph:
+    """Fully close a physical road by removing both directed edges.
+
+    Requires directed edges ``(u, v)`` and ``(v, u)``. Removes both edges
+    (discarding their attributes), leaves nodes in place, mutates ``graph``
+    in place, and returns the same graph object. Does not refresh travel
+    times on remaining edges, check connectivity, or inspect occupancy.
+
+    Applying closure mid-run while vehicles may still reference removed
+    edges is unsupported for this milestone.
+
+    Parameters
+    ----------
+    graph:
+        Directed road network.
+    u, v:
+        Ordered pair naming a physical two-way road (both directions required).
+
+    Returns
+    -------
+    networkx.DiGraph
+        The same ``graph`` object after both edges are removed.
+
+    Raises
+    ------
+    ValueError
+        If either directed edge ``(u, v)`` or ``(v, u)`` is missing.
+    """
+    if not graph.has_edge(u, v):
+        raise ValueError(f"missing directed edge ({u!r}, {v!r})")
+    if not graph.has_edge(v, u):
+        raise ValueError(f"missing directed edge ({v!r}, {u!r})")
+
+    graph.remove_edge(u, v)
+    graph.remove_edge(v, u)
+    return graph
 
 
 def reduce_road_capacity(
