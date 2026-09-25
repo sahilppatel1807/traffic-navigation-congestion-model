@@ -294,6 +294,18 @@ python scripts/validate_baseline_demand.py
 
 This runs three static/uninformed scenarios (0% navigation-app adoption, no disruption) with horizon `until=100` and writes `results/baseline_demand_validation.csv` with columns `demand_level,n,completed_count,mean_journey_time`. Automated tests assert every vehicle completes, low-demand mean journey time equals free-flow **1**, and mean journey time rises strictly low < medium < high.
 
+### Regenerate the demand × adoption table
+
+From the repository root (after installing requirements):
+
+```bash
+python scripts/run_demand_adoption.py
+```
+
+This calls `run_demand_adoption_grid` (seed `0`, horizon `until=100`, both locked inside the runner; the script takes no arguments). It crosses low / medium / high demand with adoption fractions `0`, `0.25`, `0.5`, `0.75`, and `1` (15 cells). Each cell uses a fresh default network, a bare default-corridor batch, then `assign_navigation_adoption`. The script creates `results/` if needed and overwrites `results/demand_adoption.csv` with columns `demand_level,n,adoption_rate,nav_count,seed,completed_count,mean_journey_time`. Journey time is in discrete simulation steps. There is no disruption axis and no travel-time-versus-adoption figure.
+
+Automated tests call the runner (not the script). They lock row count and order, `nav_count = round(n * rate)` (Python banker's rounding), seed `0` repeatability, completion of every vehicle, agreement of the 0% column with an uninformed baseline of the same batch size and horizon, and low-demand mean journey time **1** at every adoption rate (including the one-vehicle navigator rows). Medium- and high-demand means are observed from the run and are not hard-coded. Tests do not claim that mean journey time falls and then rises with adoption.
+
 ## Network congestion visualisation
 
 Directed edges can be coloured by the same occupancy/capacity congestion ratios used in metrics. Colour is mapped on a fixed `[0.0, 1.0]` scale (`YlOrRd`) with a colourbar; opposing directions are drawn as offset strokes. The helper is read-only and does not mutate edge attributes.
@@ -330,7 +342,7 @@ The following factors will be varied systematically:
 | Disruption | None, reduced road capacity, road closure |
 | Routing policy | Uninformed, selfish real-time, coordinated (extension) |
 
-Each scenario will be repeated using multiple random seeds to account for stochastic variation.
+The demand × adoption grid (no disruption) is recorded by `scripts/run_demand_adoption.py` at a single locked seed (`0`). A later issue will repeat stochastic scenarios with multiple seeds and compare distributions. Disruption sweeps and the rise-and-fall travel-time claim stay out of this table while routes remain locked at entry.
 
 ## Measures
 
@@ -360,9 +372,9 @@ Still planned for later issues:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement, journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, and baseline demand generation (low / medium / high corridor batches) are implemented. Mid-trip re-routing, coordinated routing, scheduled disruption / restore, continuous/multi-wave demand, wired recovery series collection, and a full experiments harness are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement, journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, baseline demand generation (low / medium / high corridor batches), and the demand × adoption experiment runner (`run_demand_adoption_grid`, CSV `results/demand_adoption.csv`) are implemented. Mid-trip re-routing, coordinated routing, scheduled disruption / restore, continuous/multi-wave demand, wired recovery series collection, multi-seed repeats, and disruption sweeps inside the experiments runner are not implemented yet.
 
-The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The next milestones are scheduled disruption/restore, continuous or multi-wave demand, wiring `C(t)` collection in runners, and an experiments harness composing demand × adoption × disruption.
+The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The demand × adoption baseline (seed `0`, no disruption) is produced by `scripts/run_demand_adoption.py` and `tests/test_experiments.py`. The next milestones are multi-seed repeats of that grid, scheduled disruption/restore composed into the same runner, continuous or multi-wave demand, and wiring `C(t)` collection. The rise-and-fall adoption hypothesis stays untested while routes are locked at entry.
 
 ## Repository layout
 
@@ -384,7 +396,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, navigation-app adoption assignment tests, reduced-road-capacity and full road-closure disruption tests, journey/network metrics tests (including pure congestion-recovery helpers on synthetic series), visualisation smoke tests, and baseline demand validation tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, navigation-app adoption assignment tests, reduced-road-capacity and full road-closure disruption tests, journey/network metrics tests (including pure congestion-recovery helpers on synthetic series), visualisation smoke tests, baseline demand validation tests, and the demand × adoption grid tests. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
