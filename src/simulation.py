@@ -9,7 +9,10 @@ clock by one. :meth:`Simulation.run` drives the clock with a soft step cap.
 In-transit edge and remaining-dwell state live in a private simulation map —
 the vehicle agent remains a pure journey-state object. Edge dwell is taken from
 the travel time implied by vehicles already on the road; occupancy is then
-incremented so later simultaneous entrants see congestion.
+incremented so later simultaneous entrants see congestion. The dwell assigned
+at entry is kept on that private record so :meth:`Simulation.in_transit_snapshot`
+can still report it after the entry tick is consumed. Reading the snapshot
+does not advance the clock or change occupancy, routes, or completion.
 
 Entry auto-routing chooses Dijkstra weights from each vehicle's
 ``uses_navigation_app`` flag (free-flow vs live congested travel time). Routes
@@ -20,13 +23,39 @@ list order, so later selfish entrants can see earlier occupancy.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, NamedTuple
 
 import networkx as nx
 
 from src.congestion import update_all_travel_times, update_road_travel_time
 from src.routing import find_shortest_route
 from src.vehicle import Vehicle
+
+
+class InTransitRecord(NamedTuple):
+    """One vehicle currently on a directed edge.
+
+    Pending and completed vehicles are omitted. ``assigned_dwell`` is the dwell
+    set when the vehicle entered ``edge`` and does not shrink as ticks are
+    consumed. ``steps_remaining`` is the dwell still left and is at least 1
+    while the record exists. Position along the edge is
+    ``(assigned_dwell - steps_remaining) / assigned_dwell``.
+    """
+
+    vehicle_id: str | int
+    edge: tuple[Any, Any]
+    assigned_dwell: int
+    steps_remaining: int
+
+
+class _Transit(NamedTuple):
+    """Private in-transit bookkeeping for one active vehicle."""
+
+    edge_u: Any
+    edge_v: Any
+    route_idx: int
+    steps_remaining: int
+    assigned_dwell: int
 
 
 class Simulation:
@@ -45,6 +74,9 @@ class Simulation:
         Vehicles currently in transit on an edge (not pending, not completed).
     completed:
         Vehicles that have finished their journeys.
+
+    ``in_transit_snapshot()`` returns read-only records for vehicles currently
+    on an edge, in ``active`` order.
     """
 
     def __init__(self, graph: nx.DiGraph, vehicles: list[Vehicle]) -> None:
@@ -78,9 +110,10 @@ class Simulation:
         self.active: list[Vehicle] = []
         self.completed: list[Vehicle] = []
 
-        # Private in-transit map: vehicle -> (edge_u, edge_v, route_idx, steps_remaining)
-        # route_idx is the index of edge_u in vehicle.route (avoids first-match scans).
-        self._in_transit: dict[Vehicle, tuple[Any, Any, int, int]] = {}
+        # Private in-transit map. route_idx is the index of edge_u in
+        # vehicle.route (avoids first-match scans). assigned_dwell is fixed
+        # when the vehicle enters the edge.
+        self._in_transit: dict[Vehicle, _Transit] = {}
 
     def step(self) -> None:
         """Process the current step, then advance the clock by one.
@@ -127,6 +160,31 @@ class Simulation:
             steps_done += 1
 
         return list(self.completed)
+
+    def in_transit_snapshot(self) -> tuple[InTransitRecord, ...]:
+        """Return vehicles currently on an edge, in active-vehicle order.
+
+        Each record names the vehicle, the directed edge it occupies, the dwell
+        assigned when it entered that edge, and the steps still remaining.
+        Vehicles that have not entered and vehicles that have finished are
+        omitted. On the opening frame, before the first step, the result is
+        empty.
+
+        This read does not advance ``current_step`` or change occupancy,
+        routes, or completion.
+        """
+        records: list[InTransitRecord] = []
+        for vehicle in self.active:
+            state = self._in_transit[vehicle]
+            records.append(
+                InTransitRecord(
+                    vehicle_id=vehicle.vehicle_id,
+                    edge=(state.edge_u, state.edge_v),
+                    assigned_dwell=state.assigned_dwell,
+                    steps_remaining=state.steps_remaining,
+                )
+            )
+        return tuple(records)
 
     def _has_pending_or_future(self) -> bool:
         """True if any vehicle has not yet entered and is still due to enter."""
@@ -188,10 +246,16 @@ class Simulation:
         edge = self.graph[u][v]
         update_road_travel_time(edge)
         travel_time = edge["current_travel_time"]
-        steps_remaining = max(1, math.ceil(travel_time))
+        assigned_dwell = max(1, math.ceil(travel_time))
         edge["occupancy"] += 1
         update_road_travel_time(edge)
-        self._in_transit[vehicle] = (u, v, route_idx, steps_remaining)
+        self._in_transit[vehicle] = _Transit(
+            edge_u=u,
+            edge_v=v,
+            route_idx=route_idx,
+            steps_remaining=assigned_dwell,
+            assigned_dwell=assigned_dwell,
+        )
 
     def _leave_edge(self, vehicle: Vehicle, u: Any, v: Any) -> None:
         """Decrement occupancy and clear in-transit state for ``vehicle``."""
@@ -214,11 +278,14 @@ class Simulation:
             if vehicle not in self._in_transit:
                 continue
 
-            u, v, route_idx, steps_remaining = self._in_transit[vehicle]
-            steps_remaining -= 1
+            state = self._in_transit[vehicle]
+            u, v, route_idx = state.edge_u, state.edge_v, state.route_idx
+            steps_remaining = state.steps_remaining - 1
 
             if steps_remaining > 0:
-                self._in_transit[vehicle] = (u, v, route_idx, steps_remaining)
+                self._in_transit[vehicle] = state._replace(
+                    steps_remaining=steps_remaining
+                )
                 continue
 
             # Dwell expired: leave current edge and arrive at node v.

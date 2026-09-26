@@ -195,7 +195,7 @@ A central controller assigns or recommends routes to minimise total travel time 
 ### `src/simulation.py` — public API
 
 ```python
-from src.simulation import Simulation
+from src.simulation import Simulation, InTransitRecord
 ```
 
 **`Simulation(graph, vehicles)`**
@@ -207,16 +207,10 @@ Processes the current clock value then increments by one. Phase order: (1) enter
 **`run(until: int) → list[Vehicle]`**
 Executes up to `until` steps. Stops early when nothing is active and no remaining vehicle has `start_time >= current_step`. Returns the list of completed vehicles. Raises `ValueError` if `until < 1`.
 
-Edge dwell uses ``max(1, ceil(current_travel_time))`` ticks taken from the
-edge's travel time **before** this vehicle is counted in occupancy, so the
-first entrant on an empty road sees free-flow while later simultaneous
-entrants see congestion. Occupancy is then incremented and the edge travel
-time refreshed. The first dwell tick is consumed in the same step a vehicle
-enters an edge from the release phase. Intermediate node transfers are
-instantaneous (leave previous edge and enter the next in the same advance)
-without cascading extra dwell ticks, so a free-flow edge of travel time ``1``
-takes exactly one simulation step. In-transit timers are stored inside the
-simulation, not on the vehicle agent.
+**`in_transit_snapshot() → tuple[InTransitRecord, ...]`**
+Read-only view of vehicles currently on an edge, in `active` order. Pending and completed vehicles are omitted, so the opening frame (clock `0`, nothing entered) is empty. Each `InTransitRecord` carries `vehicle_id`, `edge` (directed `(u, v)`), `assigned_dwell` (the dwell set when the vehicle entered that edge, `>= 1`), and `steps_remaining` (`>= 1` while the record exists). Position along the edge is `(assigned_dwell - steps_remaining) / assigned_dwell`. A vehicle that has just transferred and has not yet consumed a tick on the new edge has `steps_remaining == assigned_dwell`. Reading the snapshot does not advance the clock or change occupancy, routes, or completion.
+
+Edge dwell uses `max(1, ceil(current_travel_time))` ticks taken from the edge's travel time **before** this vehicle is counted in occupancy, so the first entrant on an empty road sees free-flow while later simultaneous entrants see congestion. Occupancy is then incremented and the edge travel time refreshed. That assigned dwell is stored on the private in-transit record and is not reduced when ticks are consumed. The first dwell tick is consumed in the same step a vehicle enters an edge from the release phase. Intermediate node transfers are instantaneous (leave previous edge and enter the next in the same advance) without cascading extra dwell ticks, so a free-flow edge of travel time `1` takes exactly one simulation step. In-transit timers are stored inside the simulation, not on the vehicle agent.
 
 ## Metrics
 
@@ -331,6 +325,22 @@ python scripts/plot_network_congestion.py
 
 This runs a short deterministic simulation that stacks seed vehicles on the top corridor so at least one edge is near capacity, then writes `results/network_congestion.png`.
 
+The static PNG writer is unchanged. The live figure in the presentation demo is drawn separately in `app/demo.py` and is not part of this helper.
+
+## Interactive presentation demo
+
+From the repository root, after installing dependencies:
+
+```bash
+streamlit run app/demo.py
+```
+
+The app opens on the Presentation Demo scene's first frame: high demand (15 vehicles), selfish routing, 100% adoption, seed `0`, and road 1–2 at half capacity. The clock is `0` and no vehicle has entered. **Presentation Demo** writes those settings again and plays. **Run** rebuilds from the controls now on screen and plays from the start. **Step** advances one tick (or builds the opening frame if nothing is loaded). **Reset** rebuilds and holds the opening frame. Playback waits half a second between frames and leaves the last frame up. Moving a demand, routing, adoption, disruption, or seed control does not change the map or the numbers until a button is pressed.
+
+Uninformed routing forces adoption to 0% and disables the slider. Switching back to Selfish leaves adoption at 0% until the slider is moved. Selfish adoption snaps to 0%, 25%, 50%, 75%, and 100%. Disruption is `None`, `Halve road 1–2`, or `Close road 1–2`, applied only when a scene is built. Navigation users are blue; uninformed drivers are dark grey. Several vehicles on one road are offset along that road for drawing only. Roads use the same occupancy/capacity yellow–orange–red scale as the static figure. A closed road is missing from the map. The right-hand column shows the timestep, vehicles in transit, completed trips, mean journey time in steps (blank until the first arrival), and the network congestion score.
+
+On the default corridor, selfish and uninformed drivers still take `0 → 1 → 2` when road 1–2 is open, because routes lock at entry while that road is empty. The live contrast is the disruption control: no disruption, the capacity cut, and closure.
+
 ## Experimental design
 
 The following factors will be varied systematically:
@@ -372,7 +382,7 @@ Still planned for later issues:
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement, journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, baseline demand generation (low / medium / high corridor batches), and the demand × adoption experiment runner (`run_demand_adoption_grid`, CSV `results/demand_adoption.csv`) are implemented. Mid-trip re-routing, coordinated routing, scheduled disruption / restore, continuous/multi-wave demand, wired recovery series collection, multi-seed repeats, and disruption sweeps inside the experiments runner are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement and a public in-transit snapshot (`in_transit_snapshot`), journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, a Streamlit presentation demo (`streamlit run app/demo.py`), baseline demand generation (low / medium / high corridor batches), and the demand × adoption experiment runner (`run_demand_adoption_grid`, CSV `results/demand_adoption.csv`) are implemented. Mid-trip re-routing, coordinated routing, scheduled disruption / restore, continuous/multi-wave demand, wired recovery series collection, multi-seed repeats, and disruption sweeps inside the experiments runner are not implemented yet.
 
 The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The demand × adoption baseline (seed `0`, no disruption) is produced by `scripts/run_demand_adoption.py` and `tests/test_experiments.py`. The next milestones are multi-seed repeats of that grid, scheduled disruption/restore composed into the same runner, continuous or multi-wave demand, and wiring `C(t)` collection. The rise-and-fall adoption hypothesis stays untested while routes are locked at entry.
 
@@ -380,6 +390,7 @@ The first modelling milestone — rising demand produces rising travel times und
 
 ```text
 src/            Simulation source code
+app/            Streamlit presentation demo (app/demo.py)
 scripts/        Deterministic demo / figure generation scripts
 notebooks/      Experiment analysis and visualisations
 results/        Generated data and figures
@@ -396,7 +407,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, navigation-app adoption assignment tests, reduced-road-capacity and full road-closure disruption tests, journey/network metrics tests (including pure congestion-recovery helpers on synthetic series), visualisation smoke tests, baseline demand validation tests, and the demand × adoption grid tests. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, in-transit snapshot tests, navigation-app adoption assignment tests, reduced-road-capacity and full road-closure disruption tests, journey/network metrics tests (including pure congestion-recovery helpers on synthetic series), visualisation smoke tests, baseline demand validation tests, and the demand × adoption grid tests. The Streamlit process is not driven by pytest. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
