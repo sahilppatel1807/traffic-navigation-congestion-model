@@ -1,0 +1,16 @@
+demand_level,n,adoption_rate,nav_count,seed,completed_count,mean_journey_time
+low,1,0.0,0,0,1,1.0
+low,1,0.25,0,0,1,1.0
+low,1,0.5,0,0,1,1.0
+low,1,0.75,1,0,1,1.0
+low,1,1.0,1,0,1,1.0
+medium,5,0.0,0,0,5,2.4
+medium,5,0.25,1,0,5,2.4
+medium,5,0.5,2,0,5,2.4
+medium,5,0.75,4,0,5,2.4
+medium,5,1.0,5,0,5,2.4
+high,15,0.0,0,0,15,2.8
+high,15,0.25,4,0,15,2.8
+high,15,0.5,8,0,15,2.8
+high,15,0.75,11,0,15,2.8
+high,15,1.0,15,0,15,2.8

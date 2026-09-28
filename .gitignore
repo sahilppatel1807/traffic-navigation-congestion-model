@@ -17,9 +17,8 @@ venv/
 .vscode/
 .DS_Store
 
-# Generated outputs (keep folder tracked)
-results/*
-!results/.gitkeep
+# Generated outputs — track small results, exclude large CSVs
+results/routing_comparison_congestion.csv
 .cursor/
 Explanation/
 spec_for_issue/
