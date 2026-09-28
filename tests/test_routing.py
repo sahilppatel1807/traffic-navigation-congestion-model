@@ -185,3 +185,91 @@ def test_unreachable_pair_raises_value_error():
 
     with pytest.raises(ValueError, match="no path exists"):
         find_shortest_route(graph, origin=0, destination=2)
+
+
+# ---------------------------------------------------------------------------
+# compare_selfish_and_coordinated — Primary Seam
+# ---------------------------------------------------------------------------
+
+
+def _halved_corridor_scenario():
+    """15-vehicle high-demand scenario with road 1–2 halved."""
+    from src.demand import build_high_demand
+    from src.disruption import reduce_road_capacity
+
+    graph = create_default_network()
+    vehicles = build_high_demand(graph)
+    reduce_road_capacity(graph, 1, 2, factor=0.5)
+    return graph, vehicles
+
+
+def test_compare_returns_correct_keys():
+    from src.routing import compare_selfish_and_coordinated
+
+    graph, vehicles = _halved_corridor_scenario()
+    result = compare_selfish_and_coordinated(graph, vehicles, until=200)
+
+    assert set(result.keys()) == {
+        "selfish_total_journey_time",
+        "selfish_mean_journey_time",
+        "coordinated_total_journey_time",
+        "coordinated_mean_journey_time",
+    }
+
+
+def test_compare_coordinated_beats_selfish_on_halved_corridor():
+    """Coordinated total = 53, selfish total = 58 on the halved-corridor scenario."""
+    from src.routing import compare_selfish_and_coordinated
+
+    graph, vehicles = _halved_corridor_scenario()
+    result = compare_selfish_and_coordinated(graph, vehicles, until=200)
+
+    assert result["selfish_total_journey_time"] == 58.0
+    assert result["coordinated_total_journey_time"] == 53.0
+    assert result["coordinated_total_journey_time"] < result["selfish_total_journey_time"]
+
+
+def test_compare_mean_times_consistent_with_totals():
+    """Mean journey times equal total / vehicle count."""
+    from src.routing import compare_selfish_and_coordinated
+
+    graph, vehicles = _halved_corridor_scenario()
+    n = len(vehicles)
+    result = compare_selfish_and_coordinated(graph, vehicles, until=200)
+
+    assert result["selfish_mean_journey_time"] == pytest.approx(
+        result["selfish_total_journey_time"] / n
+    )
+    assert result["coordinated_mean_journey_time"] == pytest.approx(
+        result["coordinated_total_journey_time"] / n
+    )
+
+
+def test_compare_does_not_mutate_original_graph_or_vehicles():
+    """compare_selfish_and_coordinated leaves the caller's graph and vehicle list intact."""
+    from src.routing import compare_selfish_and_coordinated
+
+    graph, vehicles = _halved_corridor_scenario()
+    edge_snapshot = {(u, v): dict(attrs) for u, v, attrs in graph.edges(data=True)}
+    original_routes = [v.route for v in vehicles]
+    original_completion = [v.completion_time for v in vehicles]
+
+    compare_selfish_and_coordinated(graph, vehicles, until=200)
+
+    assert {(u, v): dict(attrs) for u, v, attrs in graph.edges(data=True)} == edge_snapshot
+    for v, orig_route, orig_completion in zip(vehicles, original_routes, original_completion):
+        assert v.route == orig_route
+        assert v.completion_time == orig_completion
+
+
+def test_compare_raises_value_error_if_vehicle_cannot_complete():
+    """ValueError raised if a vehicle cannot reach its destination within until steps."""
+    from src.routing import compare_selfish_and_coordinated
+
+    graph = create_default_network()
+    from src.vehicle import Vehicle
+    # Give a very tight step limit so the vehicle cannot complete.
+    vehicles = [Vehicle(vehicle_id="v0", origin=0, destination=5, start_time=0)]
+    # until=1 is way too few steps for a 0→5 journey.
+    with pytest.raises(ValueError, match="did not complete"):
+        compare_selfish_and_coordinated(graph, vehicles, until=1)

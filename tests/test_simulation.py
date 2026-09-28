@@ -320,3 +320,105 @@ def test_empty_vehicle_list_is_allowed():
     assert sim.completed == []
     # Idle immediately — no steps needed.
     assert sim.current_step == 0
+
+
+# ---------------------------------------------------------------------------
+# Coordinated routing policy — Primary Seam
+# ---------------------------------------------------------------------------
+
+
+def _halved_corridor_scenario():
+    """15-vehicle high-demand scenario with road 1-2 halved."""
+    from src.demand import build_high_demand
+    from src.disruption import reduce_road_capacity
+
+    graph = create_default_network()
+    vehicles = build_high_demand(graph)
+    reduce_road_capacity(graph, 1, 2, factor=0.5)
+    return graph, vehicles
+
+
+def test_coordinated_routing_reduces_total_journey_time_on_halved_corridor():
+    """Coordinated routing achieves total journey time 53 vs selfish 58."""
+    from src.adoption import assign_navigation_adoption
+
+    # Selfish baseline.
+    graph_s, vehicles_s = _halved_corridor_scenario()
+    assign_navigation_adoption(vehicles_s, 1.0, seed=0)
+    sim_s = Simulation(graph_s, vehicles_s)
+    sim_s.run(until=200)
+    selfish_total = sum(v.completion_time - v.start_time for v in vehicles_s)
+
+    # Coordinated.
+    graph_c, vehicles_c = _halved_corridor_scenario()
+    sim_c = Simulation(graph_c, vehicles_c, routing_policy="coordinated")
+    sim_c.run(until=200)
+    coordinated_total = sum(v.completion_time - v.start_time for v in vehicles_c)
+
+    assert selfish_total == 58
+    assert coordinated_total == 53
+    assert coordinated_total < selfish_total
+
+
+def test_coordinated_routing_diverts_last_two_vehicles_to_lower_corridor():
+    """The last two vehicles should take the lower-corridor route 0→3→4→5→2."""
+    graph, vehicles = _halved_corridor_scenario()
+    sim = Simulation(graph, vehicles, routing_policy="coordinated")
+    sim.run(until=200)
+
+    lower_route = [0, 3, 4, 5, 2]
+    diverted = [v for v in vehicles if v.route == lower_route]
+    # Exactly the last two vehicles (demand-13 and demand-14) should be diverted.
+    assert len(diverted) == 2
+    diverted_ids = {v.vehicle_id for v in diverted}
+    assert diverted_ids == {"demand-13", "demand-14"}
+
+
+def test_coordinated_routing_policy_attribute_is_stored():
+    graph = create_default_network()
+    vehicle = Vehicle(vehicle_id="v0", origin=0, destination=2, start_time=0)
+    sim = Simulation(graph, [vehicle], routing_policy="coordinated")
+    assert sim.routing_policy == "coordinated"
+
+
+def test_coordinated_routing_all_vehicles_complete():
+    graph, vehicles = _halved_corridor_scenario()
+    sim = Simulation(graph, vehicles, routing_policy="coordinated")
+    sim.run(until=200)
+    for v in vehicles:
+        assert v.completion_time is not None
+
+
+def test_coordinated_routing_raises_value_error_when_no_path():
+    """ValueError raised when a vehicle has no path to its destination."""
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, free_flow_time=1.0, capacity=10, occupancy=0, current_travel_time=1.0)
+    graph.add_node(2)  # disconnected
+    vehicle = Vehicle(vehicle_id="v0", origin=0, destination=2, start_time=0)
+
+    sim = Simulation(graph, [vehicle], routing_policy="coordinated")
+    with pytest.raises(ValueError, match="no path exists"):
+        sim.step()
+
+
+def test_coordinated_routing_raises_value_error_when_search_space_too_large():
+    """ValueError raised when the number of route combinations exceeds 32 768.
+
+    Graph has 4 simple paths (1 direct + 3 via intermediate nodes).
+    stars-and-bars: C(57+4-1, 4-1) = C(60, 3) = 34220 > 32768.
+    """
+    graph = nx.DiGraph()
+    attrs = {"free_flow_time": 1.0, "capacity": 10, "occupancy": 0, "current_travel_time": 1.0}
+    # 3 intermediate nodes (10, 11, 12) give 3 indirect routes; plus a direct 0→2.
+    graph.add_edge(0, 2, **attrs)
+    for mid in (10, 11, 12):
+        graph.add_edge(0, mid, **attrs)
+        graph.add_edge(mid, 2, **attrs)
+    # 57 vehicles on 0→2: C(60, 3) = 34220 > 32768.
+    vehicles = [
+        Vehicle(vehicle_id=f"v{i}", origin=0, destination=2, start_time=0)
+        for i in range(57)
+    ]
+    sim = Simulation(graph, vehicles, routing_policy="coordinated")
+    with pytest.raises(ValueError, match="32.768|32768"):
+        sim.step()
