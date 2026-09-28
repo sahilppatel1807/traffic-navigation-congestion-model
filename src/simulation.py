@@ -18,11 +18,21 @@ Entry auto-routing chooses Dijkstra weights from each vehicle's
 ``uses_navigation_app`` flag (free-flow vs live congested travel time). Routes
 are locked at entry; same-step due vehicles are still routed then entered in
 list order, so later selfish entrants can see earlier occupancy.
+
+When ``routing_policy="coordinated"`` is set on a :class:`Simulation`, a
+central controller groups vehicles releasing on the same step, enumerates
+candidate route distributions, evaluates each by running a deep-copied
+sub-simulation to completion, and assigns the distribution that minimises the
+sum of journey times for the releasing cohort. Tie-breaks prefer maximum
+agreement with selfish routes then lexicographically smallest path lists.
 """
 
 from __future__ import annotations
 
+import copy
+import itertools
 import math
+from math import comb
 from typing import Any, NamedTuple
 
 import networkx as nx
@@ -79,7 +89,7 @@ class Simulation:
     on an edge, in ``active`` order.
     """
 
-    def __init__(self, graph: nx.DiGraph, vehicles: list[Vehicle]) -> None:
+    def __init__(self, graph: nx.DiGraph, vehicles: list[Vehicle], routing_policy: str = "decentralized") -> None:
         """Create a simulation from a graph and a list of vehicles.
 
         Parameters
@@ -91,6 +101,10 @@ class Simulation:
         vehicles:
             Pre-constructed vehicles. Already-completed agents
             (``completion_time is not None``) are rejected.
+        routing_policy:
+            The routing policy to use for unrouted vehicles at release.
+            Defaults to ``"decentralized"``. Use ``"coordinated"`` for the
+            central coordinated routing policy.
 
         Raises
         ------
@@ -106,6 +120,7 @@ class Simulation:
 
         self.graph = graph
         self.vehicles = vehicles
+        self.routing_policy = routing_policy
         self.current_step = 0
         self.active: list[Vehicle] = []
         self.completed: list[Vehicle] = []
@@ -197,6 +212,13 @@ class Simulation:
 
     def _enter_due_vehicles(self) -> None:
         """Release vehicles whose ``start_time`` equals ``current_step``."""
+        if self.routing_policy == "coordinated":
+            self._enter_due_vehicles_coordinated()
+        else:
+            self._enter_due_vehicles_decentralized()
+
+    def _enter_due_vehicles_decentralized(self) -> None:
+        """Decentralized (selfish/uninformed) entry: route each vehicle independently."""
         for vehicle in self.vehicles:
             if vehicle in self._in_transit or vehicle in self.completed:
                 continue
@@ -224,6 +246,225 @@ class Simulation:
                     f"least two nodes, got {vehicle.route!r}"
                 )
 
+            u, v = vehicle.route[0], vehicle.route[1]
+            self._enter_edge(vehicle, u, v, route_idx=0)
+            self.active.append(vehicle)
+
+    def _enter_due_vehicles_coordinated(self) -> None:
+        """Coordinated entry: central controller assigns routes to minimize total journey time.
+
+        Algorithm
+        ---------
+        1. Collect all vehicles releasing this step.
+        2. For each vehicle, list all simple paths (origin → destination).
+           Raise ``ValueError`` if any vehicle has no path.
+        3. Sort each vehicle's paths: selfish path (Dijkstra on
+           ``current_travel_time``) at index 0, rest sorted lexicographically.
+        4. Enumerate all distributions of vehicles over paths within each
+           (origin, destination) group. A distribution specifies how many
+           vehicles take each path; vehicles are assigned in order (first
+           ``c_0`` take path 0, next ``c_1`` take path 1, …).
+        5. The Cartesian product across groups must not exceed 32 768.
+           Raise ``ValueError`` if it does.
+        6. For each candidate global assignment, deep-copy the simulation,
+           pre-set routes, and run until all releasing vehicles complete.
+           Raise ``ValueError`` if any releasing vehicle fails to complete.
+        7. Choose the assignment minimising the sum of journey times. Ties
+           broken by: (a) maximise selfish-route agreement; (b) minimise the
+           concatenated route node lists lexicographically.
+        8. Apply the chosen routes on the real vehicle agents and enter them.
+        """
+        # --- 1. Collect releasing vehicles (preserve list order) ---
+        releasing: list[Vehicle] = []
+        for vehicle in self.vehicles:
+            if vehicle in self._in_transit or vehicle in self.completed:
+                continue
+            if vehicle.start_time == self.current_step:
+                releasing.append(vehicle)
+
+        if not releasing:
+            return
+
+        # --- 2 & 3. Per-vehicle: all simple paths, sorted with selfish first ---
+        selfish_routes: list[list[Any]] = []
+        all_paths_per_vehicle: list[list[list[Any]]] = []
+        for vehicle in releasing:
+            if vehicle.route is not None:
+                # Pre-set route: treat it as the only option.
+                selfish_routes.append(list(vehicle.route))
+                all_paths_per_vehicle.append([list(vehicle.route)])
+                continue
+
+            # Selfish route (index 0).
+            selfish = find_shortest_route(
+                self.graph, vehicle.origin, vehicle.destination,
+                weight="current_travel_time"
+            )
+            selfish_routes.append(selfish)
+
+            # All simple paths.
+            try:
+                raw_paths = list(
+                    nx.all_simple_paths(self.graph, vehicle.origin, vehicle.destination)
+                )
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                raw_paths = []
+
+            if not raw_paths:
+                raise ValueError(
+                    f"no path exists for vehicle {vehicle.vehicle_id!r} "
+                    f"from {vehicle.origin!r} to {vehicle.destination!r}"
+                )
+
+            # Sort: selfish first, then others lexicographically.
+            others = sorted(
+                [p for p in raw_paths if p != selfish],
+                key=lambda p: [str(n) for n in p],
+            )
+            sorted_paths = [selfish] + others
+            all_paths_per_vehicle.append(sorted_paths)
+
+        # --- 4 & 5. Group by (origin, destination) and build distributions ---
+        # Map each releasing vehicle to its index in `releasing`.
+        od_groups: dict[tuple[Any, Any], list[int]] = {}
+        for idx, vehicle in enumerate(releasing):
+            key = (vehicle.origin, vehicle.destination)
+            od_groups.setdefault(key, []).append(idx)
+
+        # For each OD group, enumerate all distributions (stars-and-bars):
+        # how many vehicles take path 0, path 1, etc.
+        # A distribution is a tuple of integers summing to n.
+        def _distributions(n: int, k: int) -> list[tuple[int, ...]]:
+            """All non-negative integer tuples of length k summing to n."""
+            if k == 1:
+                return [(n,)]
+            result = []
+            for first in range(n + 1):
+                for rest in _distributions(n - first, k - 1):
+                    result.append((first,) + rest)
+            return result
+
+        # Collect per-group distribution lists and vehicle-index lists.
+        group_keys = list(od_groups.keys())
+        group_vehicle_indices: list[list[int]] = [od_groups[k] for k in group_keys]
+        group_paths: list[list[list[Any]]] = []
+
+        # --- Check search-space size using stars-and-bars formula BEFORE enumeration ---
+        # Number of distributions for n vehicles over k paths = C(n+k-1, k-1).
+        _MAX_COMBINATIONS = 32_768
+        total_combinations = 1
+        for vid_indices in group_vehicle_indices:
+            rep_idx = vid_indices[0]
+            paths = all_paths_per_vehicle[rep_idx]
+            n, k = len(vid_indices), len(paths)
+            group_dist_count = comb(n + k - 1, k - 1)
+            total_combinations *= group_dist_count
+            if total_combinations > _MAX_COMBINATIONS:
+                raise ValueError(
+                    f"coordinated routing search space ({total_combinations}+ combinations) "
+                    f"exceeds the limit of {_MAX_COMBINATIONS}"
+                )
+
+        # Now actually enumerate distributions (safe since total_combinations <= limit).
+        group_distributions: list[list[tuple[int, ...]]] = []
+        for vid_indices in group_vehicle_indices:
+            rep_idx = vid_indices[0]
+            paths = all_paths_per_vehicle[rep_idx]
+            group_paths.append(paths)
+            group_distributions.append(_distributions(len(vid_indices), len(paths)))
+
+        # --- 6. Evaluate each global assignment ---
+        releasing_ids = {v.vehicle_id for v in releasing}
+
+        # Determine a sub-simulation step limit: generous upper bound.
+        _SUB_SIM_LIMIT = max(200, 10 * len(releasing))
+
+        best_assignment: list[list[Any]] | None = None
+        best_total_time: float = float("inf")
+        best_selfish_agreement: int = -1
+        best_route_key: list[list[Any]] = []
+
+        for dist_combo in itertools.product(*group_distributions):
+            # dist_combo[i] is the distribution tuple for group i.
+            # Build the vehicle-index → route mapping.
+            assignment: dict[int, list[Any]] = {}
+            for group_i, dist in enumerate(dist_combo):
+                vid_indices = group_vehicle_indices[group_i]
+                paths = group_paths[group_i]
+                pointer = 0
+                for path_j, count in enumerate(dist):
+                    for _ in range(count):
+                        assignment[vid_indices[pointer]] = paths[path_j]
+                        pointer += 1
+
+            # Build the flattened route list in releasing order.
+            assigned_routes: list[list[Any]] = [assignment[i] for i in range(len(releasing))]
+
+            # Deep-copy the simulation and pre-set routes.
+            sim_copy = copy.deepcopy(self)
+            sim_copy.routing_policy = "decentralized"  # sub-sim uses decentralized
+            releasing_copy = [
+                v for v in sim_copy.vehicles
+                if v.vehicle_id in releasing_ids
+                and v not in sim_copy._in_transit
+                and v not in sim_copy.completed
+                and v.start_time == sim_copy.current_step
+            ]
+            # Sort releasing_copy in same order as releasing (by vehicle_id match).
+            id_to_copy: dict[Any, Vehicle] = {v.vehicle_id: v for v in releasing_copy}
+            for i, real_vehicle in enumerate(releasing):
+                copy_vehicle = id_to_copy.get(real_vehicle.vehicle_id)
+                if copy_vehicle is not None:
+                    copy_vehicle.set_route(assigned_routes[i], sim_copy.graph)
+
+            # Run sub-simulation until all releasing vehicles complete.
+            sim_copy.run(until=_SUB_SIM_LIMIT)
+
+            # Collect journey times for releasing vehicles.
+            total_time = 0.0
+            for real_vehicle in releasing:
+                copy_vehicle = id_to_copy.get(real_vehicle.vehicle_id)
+                if copy_vehicle is None or copy_vehicle.completion_time is None:
+                    raise ValueError(
+                        f"coordinated routing: vehicle {real_vehicle.vehicle_id!r} "
+                        f"did not complete within {_SUB_SIM_LIMIT} sub-simulation steps"
+                    )
+                total_time += copy_vehicle.completion_time - copy_vehicle.start_time
+
+            # Compute selfish-route agreement count.
+            selfish_agreement = sum(
+                1 for i, route in enumerate(assigned_routes)
+                if route == selfish_routes[i]
+            )
+
+            # Compare: minimize total time → maximize selfish agreement →
+            # minimize route lists lexicographically (compare as list of lists).
+            is_better = False
+            if total_time < best_total_time:
+                is_better = True
+            elif total_time == best_total_time:
+                if selfish_agreement > best_selfish_agreement:
+                    is_better = True
+                elif selfish_agreement == best_selfish_agreement:
+                    if assigned_routes < best_route_key:
+                        is_better = True
+
+            if is_better:
+                best_assignment = assigned_routes
+                best_total_time = total_time
+                best_selfish_agreement = selfish_agreement
+                best_route_key = assigned_routes
+
+        assert best_assignment is not None
+
+        # --- 7. Apply chosen routes and enter vehicles ---
+        for vehicle, route in zip(releasing, best_assignment):
+            vehicle.set_route(route, self.graph)
+            if len(vehicle.route) < 2:  # type: ignore[arg-type]
+                raise ValueError(
+                    f"vehicle {vehicle.vehicle_id!r} route must contain at "
+                    f"least two nodes, got {vehicle.route!r}"
+                )
             u, v = vehicle.route[0], vehicle.route[1]
             self._enter_edge(vehicle, u, v, route_idx=0)
             self.active.append(vehicle)

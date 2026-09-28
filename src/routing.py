@@ -19,10 +19,13 @@ find_shortest_route(graph, origin, destination, weight) -> list
     Pure Dijkstra shortest path; does not mutate the graph or assign routes.
 estimate_route_cost(graph, route, weight) -> float
     Pure sum of edge weights along a route; does not mutate the graph.
+compare_selfish_and_coordinated(graph, vehicles, until) -> dict
+    Run selfish vs coordinated and return a comparison summary dict.
 """
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Sequence
 
 import networkx as nx
@@ -133,3 +136,77 @@ def estimate_route_cost(
             )
         total += graph[u][v][weight]
     return float(total)
+
+
+def compare_selfish_and_coordinated(
+    graph: nx.DiGraph,
+    vehicles: list,
+    until: int,
+) -> dict[str, float]:
+    """Compare selfish and coordinated routing on identical scenarios.
+
+    Both runs operate on independent deep copies of ``graph`` and
+    ``vehicles``. In the selfish run every vehicle has
+    ``uses_navigation_app=True`` (ignoring original adoption flags); any
+    pre-set routes are preserved. In the coordinated run
+    ``routing_policy="coordinated"`` is used.
+
+    Parameters
+    ----------
+    graph:
+        Directed road network. Deep-copied before each run.
+    vehicles:
+        Pre-built vehicle list. Deep-copied before each run.
+    until:
+        Maximum simulation steps for each run. Passed straight to
+        :meth:`~src.simulation.Simulation.run`.
+
+    Returns
+    -------
+    dict
+        Keys: ``selfish_total_journey_time``, ``selfish_mean_journey_time``,
+        ``coordinated_total_journey_time``, ``coordinated_mean_journey_time``.
+
+    Raises
+    ------
+    ValueError
+        If any vehicle does not complete within ``until`` steps in either run.
+    """
+    # Import here to avoid a circular import at module level.
+    from src.simulation import Simulation
+
+    def _run(routing_policy: str, force_nav: bool) -> list:
+        g = copy.deepcopy(graph)
+        vs = copy.deepcopy(vehicles)
+        if force_nav:
+            for v in vs:
+                v.uses_navigation_app = True
+        sim = Simulation(g, vs, routing_policy=routing_policy)
+        sim.run(until=until)
+        return vs
+
+    selfish_vs = _run("decentralized", force_nav=True)
+    coordinated_vs = _run("coordinated", force_nav=False)
+
+    def _check_and_sum(vs: list, label: str) -> tuple[float, float]:
+        times = []
+        for v in vs:
+            if v.completion_time is None:
+                raise ValueError(
+                    f"compare_selfish_and_coordinated: vehicle {v.vehicle_id!r} "
+                    f"did not complete within {until} steps under {label} routing"
+                )
+            times.append(v.completion_time - v.start_time)
+        total = float(sum(times))
+        mean = total / len(times) if times else 0.0
+        return total, mean
+
+    s_total, s_mean = _check_and_sum(selfish_vs, "selfish")
+    c_total, c_mean = _check_and_sum(coordinated_vs, "coordinated")
+
+    return {
+        "selfish_total_journey_time": s_total,
+        "selfish_mean_journey_time": s_mean,
+        "coordinated_total_journey_time": c_total,
+        "coordinated_mean_journey_time": c_mean,
+    }

@@ -50,7 +50,7 @@ PRESENTATION_DISRUPTION = "Halve road 1–2"
 PRESENTATION_SEED = 0
 
 DEMAND_OPTIONS = ("Low", "Medium", "High")
-POLICY_OPTIONS = ("Uninformed", "Selfish")
+POLICY_OPTIONS = ("Uninformed", "Selfish", "Coordinated")
 ADOPTION_OPTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
 DISRUPTION_OPTIONS = ("None", "Halve road 1–2", "Close road 1–2")
 
@@ -62,6 +62,7 @@ _EDGE_ARC_RAD = 0.12
 _CONGESTION_CMAP = "YlOrRd"
 _NAVIGATION_COLOR = "#1f77b4"
 _UNINFORMED_COLOR = "#333333"
+_COORDINATED_COLOR = "#2ca02c"
 # Pulls dots off the node discs and onto the visible road stroke.
 _EDGE_DRAW_START = 0.12
 _EDGE_DRAW_END = 0.88
@@ -85,13 +86,17 @@ def _build_scenario(
     """Build one scene from the controls and return it at the opening frame."""
     graph = create_default_network()
     vehicles = _DEMAND_BUILDERS[demand](graph)
-    rate = 0.0 if policy == "Uninformed" else float(adoption)
+    if policy == "Coordinated":
+        rate = 0.0
+    else:
+        rate = 0.0 if policy == "Uninformed" else float(adoption)
     assign_navigation_adoption(vehicles, rate, seed=int(seed))
     if disruption == "Halve road 1–2":
         reduce_road_capacity(graph, 1, 2, factor=0.5)
     elif disruption == "Close road 1–2":
         close_road(graph, 1, 2)
-    return Simulation(graph, vehicles)
+    routing_policy = "coordinated" if policy == "Coordinated" else "decentralized"
+    return Simulation(graph, vehicles, routing_policy=routing_policy)
 
 
 def _scenario_from_controls() -> Simulation:
@@ -117,8 +122,8 @@ def _has_more_to_do(simulation: Simulation) -> bool:
 
 
 def _on_policy_change() -> None:
-    """Uninformed routing has no adoption mix. Returning to Selfish stays at 0%."""
-    if st.session_state.policy == "Uninformed":
+    """Uninformed/Coordinated routing has no adoption mix. Returning to Selfish stays at 0%."""
+    if st.session_state.policy in ("Uninformed", "Coordinated"):
         st.session_state.adoption = 0.0
 
 
@@ -253,7 +258,12 @@ def _draw_network(simulation: Simulation):
         rad = _EDGE_ARC_RAD if graph.has_edge(v, u) else 0.0
         x, y = _point_on_edge(layout[u], layout[v], fraction, rad)
         vehicle = by_id[record.vehicle_id]
-        color = _NAVIGATION_COLOR if vehicle.uses_navigation_app else _UNINFORMED_COLOR
+        if simulation.routing_policy == "coordinated":
+            color = _COORDINATED_COLOR
+        elif vehicle.uses_navigation_app:
+            color = _NAVIGATION_COLOR
+        else:
+            color = _UNINFORMED_COLOR
         ax.scatter(
             [x],
             [y],
@@ -358,7 +368,7 @@ def main() -> None:
             options=list(ADOPTION_OPTIONS),
             format_func=lambda rate: f"{int(rate * 100)}%",
             key="adoption",
-            disabled=st.session_state.policy == "Uninformed",
+            disabled=st.session_state.policy in ("Uninformed", "Coordinated"),
         )
     with disruption_col:
         st.selectbox("Disruption", DISRUPTION_OPTIONS, key="disruption")
@@ -382,7 +392,7 @@ def main() -> None:
     map_col, metric_col = st.columns([4, 1])
     with map_col:
         map_slot = st.empty()
-        st.caption("Blue: navigation app. Dark grey: uninformed.")
+        st.caption("Green: coordinated. Blue: navigation app. Dark grey: uninformed.")
     with metric_col:
         metric_slot = st.empty()
 

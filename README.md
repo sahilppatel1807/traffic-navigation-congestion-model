@@ -4,7 +4,7 @@ An agent-based computational model that investigates whether real-time navigatio
 
 ## Research question
 
-**How do traffic demand and real-time navigation-app adoption affect system-wide congestion and travel times after a road disruption?**
+**How do traffic demand, real-time navigation-app adoption, and routing policy (selfish vs coordinated) affect system-wide congestion and travel times after a road disruption?**
 
 ## Motivation
 
@@ -186,9 +186,36 @@ close_road(graph, u, v)
 - Removes both directed edges (attributes discarded); leaves nodes in place. Does not refresh travel times on remaining edges, check connectivity, or inspect occupancy.
 - Mutates the graph in place and returns the same object. Closing an already-absent pair raises (not idempotent). Mid-run use while vehicles may still reference removed edges is unsupported.
 
-### Coordinated routing (extension)
+### Coordinated routing (central controller)
 
-A central controller assigns or recommends routes to minimise total travel time across all vehicles. It may assign a car to a slightly slower route if that prevents a major bottleneck and improves network-wide performance.
+A central controller assigns routes to minimise total travel time across all simultaneously releasing vehicles. It may assign individual vehicles to slightly slower routes if that prevents a major bottleneck and improves network-wide performance — establishing the theoretical optimum (lower bound) against which selfish routing can be measured.
+
+#### `src/simulation.py` — coordinated routing
+
+Pass `routing_policy="coordinated"` to `Simulation(graph, vehicles, routing_policy="coordinated")` to activate central routing. At each step, all vehicles releasing simultaneously form a group. For each group, the controller:
+
+1. Lists all simple paths per vehicle using `networkx.all_simple_paths`. Raises `ValueError` if any vehicle has no path.
+2. Sorts each vehicle's paths with the selfish (live-time shortest) path first, remaining paths sorted lexicographically.
+3. Enumerates distributions of vehicles over paths (stars-and-bars). Raises `ValueError` if the Cartesian product exceeds **32,768** combinations.
+4. For each candidate distribution, deep-copies the simulation, pre-sets routes, and runs until the cohort completes.
+5. Picks the assignment minimising the sum of journey times. Tie-breaks: (a) maximise agreement with selfish routes; (b) minimise the concatenated route lists lexicographically.
+
+#### `src/routing.py` — `compare_selfish_and_coordinated`
+
+```python
+from src.routing import compare_selfish_and_coordinated
+
+result = compare_selfish_and_coordinated(graph, vehicles, until=200)
+# Returns:
+# {
+#   "selfish_total_journey_time": float,
+#   "selfish_mean_journey_time": float,
+#   "coordinated_total_journey_time": float,
+#   "coordinated_mean_journey_time": float,
+# }
+```
+
+Deep-copies the graph and vehicles before each run. In the selfish run all vehicles have `uses_navigation_app=True`; in the coordinated run `routing_policy="coordinated"` is used. Raises `ValueError` if any vehicle does not complete within `until` steps.
 
 ## Simulation clock and vehicle movement
 
@@ -198,8 +225,8 @@ A central controller assigns or recommends routes to minimise total travel time 
 from src.simulation import Simulation, InTransitRecord
 ```
 
-**`Simulation(graph, vehicles)`**
-Constructs a discrete-time simulation from a directed road graph and a flat list of pre-built `Vehicle` agents. Public attributes: `graph`, `vehicles`, `current_step` (starts at `0`), `active` (in-transit only), and `completed`. Raises `ValueError` if any vehicle already has a non-`None` `completion_time`.
+**`Simulation(graph, vehicles, routing_policy="decentralized")`**
+Constructs a discrete-time simulation from a directed road graph and a flat list of pre-built `Vehicle` agents. Public attributes: `graph`, `vehicles`, `current_step` (starts at `0`), `active` (in-transit only), `completed`, and `routing_policy`. Raises `ValueError` if any vehicle already has a non-`None` `completion_time`. Set `routing_policy="coordinated"` to activate the central coordinated routing controller (see [Coordinated routing](#coordinated-routing-central-controller) above).
 
 **`step() → None`**
 Processes the current clock value then increments by one. Phase order: (1) enter vehicles due at `current_step` (auto-route if needed — `free_flow_time` for uninformed vehicles, `current_travel_time` for `uses_navigation_app=True`; place onto first edge); (2) advance in-transit vehicles (consume dwell; leave/enter edges or complete); (3) refresh all edge travel times via BPR. Mutates state in place; returns `None`.
@@ -378,11 +405,12 @@ Still planned for later issues:
 - Network diagrams coloured by congestion level (see `scripts/plot_network_congestion.py` → `results/network_congestion.png`).
 - Time-series plots of congestion after a disruption.
 - Average travel time versus navigation-app adoption rate.
-- Comparisons of selfish and coordinated routing across demand levels.
+- **Comparisons of selfish and coordinated routing across demand levels** — use `compare_selfish_and_coordinated` in `src/routing.py` to quantify the system-wide benefit of central coordination (the "price of anarchy").
+- On the 15-vehicle halved-corridor scenario, coordinated routing achieves total journey time **53** vs selfish **58** (a saving of 5 steps), with the last two vehicles diverted to `0 → 3 → 4 → 5 → 2` to relieve the bottleneck.
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement and a public in-transit snapshot (`in_transit_snapshot`), journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, a Streamlit presentation demo (`streamlit run app/demo.py`), baseline demand generation (low / medium / high corridor batches), and the demand × adoption experiment runner (`run_demand_adoption_grid`, CSV `results/demand_adoption.csv`) are implemented. Mid-trip re-routing, coordinated routing, scheduled disruption / restore, continuous/multi-wave demand, wired recovery series collection, multi-seed repeats, and disruption sweeps inside the experiments runner are not implemented yet.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement and a public in-transit snapshot (`in_transit_snapshot`), journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, a Streamlit presentation demo (`streamlit run app/demo.py`), baseline demand generation (low / medium / high corridor batches), the demand × adoption experiment runner (`run_demand_adoption_grid`, CSV `results/demand_adoption.csv`), **coordinated routing policy** (`routing_policy="coordinated"` on `Simulation`), and the **selfish-vs-coordinated comparison utility** (`compare_selfish_and_coordinated` in `src/routing.py`) are implemented. Mid-trip re-routing, scheduled disruption / restore, continuous/multi-wave demand, wired recovery series collection, multi-seed repeats, and disruption sweeps inside the experiments runner are not implemented yet.
 
 The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The demand × adoption baseline (seed `0`, no disruption) is produced by `scripts/run_demand_adoption.py` and `tests/test_experiments.py`. The next milestones are multi-seed repeats of that grid, scheduled disruption/restore composed into the same runner, continuous or multi-wave demand, and wiring `C(t)` collection. The rise-and-fall adoption hypothesis stays untested while routes are locked at entry.
 
@@ -407,7 +435,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, in-transit snapshot tests, navigation-app adoption assignment tests, reduced-road-capacity and full road-closure disruption tests, journey/network metrics tests (including pure congestion-recovery helpers on synthetic series), visualisation smoke tests, baseline demand validation tests, and the demand × adoption grid tests. The Streamlit process is not driven by pytest. Additional model behaviour tests will be added with later issues.
+At this stage, `pytest` runs the project smoke check, network topology tests, congestion calculation tests, vehicle agent tests (including `uses_navigation_app`), static routing and route-cost estimation tests, simulation clock / vehicle movement / selfish entry-routing tests, in-transit snapshot tests, navigation-app adoption assignment tests, reduced-road-capacity and full road-closure disruption tests, journey/network metrics tests (including pure congestion-recovery helpers on synthetic series), visualisation smoke tests, baseline demand validation tests, the demand × adoption grid tests, coordinated routing policy tests (15-vehicle halved-corridor scenario achieving total journey time 53 vs selfish 58), and `compare_selfish_and_coordinated` function tests. The Streamlit process is not driven by pytest. Additional model behaviour tests will be added with later issues.
 
 ## Reproducibility
 
