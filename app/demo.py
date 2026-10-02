@@ -34,15 +34,17 @@ from matplotlib.colors import Normalize
 from matplotlib.patches import FancyArrowPatch
 
 from src.adoption import assign_navigation_adoption
-from src.demand import build_high_demand, build_low_demand, build_medium_demand
+from src.demand import build_corridor_demand
 from src.disruption import close_road, reduce_road_capacity
+from src.experiments import EXPERIMENT_DEMAND_LEVELS, EXPERIMENT_PRIMARY_CAPACITY
 from src.metrics import completed_count, mean_journey_time, network_congestion_score, road_congestion
 from src.network import create_default_network
 from src.simulation import Simulation
 from src.visualisation import DEFAULT_NODE_POSITIONS
 
 # Opening scene and the Presentation Demo button: high demand, selfish
-# routing, full adoption, seed 0, road 1–2 at half capacity.
+# routing, full adoption, seed 0, and road 1–2 at half of the constrained
+# primary-corridor capacity used by the routing comparison experiment.
 PRESENTATION_DEMAND = "High"
 PRESENTATION_POLICY = "Selfish"
 PRESENTATION_ADOPTION = 1.0
@@ -50,6 +52,9 @@ PRESENTATION_DISRUPTION = "Halve road 1–2"
 PRESENTATION_SEED = 0
 
 DEMAND_OPTIONS = ("Low", "Medium", "High")
+DEMAND_COUNTS = {
+    level.title(): count for level, count in EXPERIMENT_DEMAND_LEVELS.items()
+}
 POLICY_OPTIONS = ("Uninformed", "Selfish", "Coordinated")
 ADOPTION_OPTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
 DISRUPTION_OPTIONS = ("None", "Halve road 1–2", "Close road 1–2")
@@ -69,9 +74,8 @@ _EDGE_DRAW_END = 0.88
 _SAME_EDGE_OFFSET = 0.045
 
 _DEMAND_BUILDERS = {
-    "Low": build_low_demand,
-    "Medium": build_medium_demand,
-    "High": build_high_demand,
+    level: (lambda graph, count=count: build_corridor_demand(graph, count))
+    for level, count in DEMAND_COUNTS.items()
 }
 
 
@@ -85,6 +89,9 @@ def _build_scenario(
 ) -> Simulation:
     """Build one scene from the controls and return it at the opening frame."""
     graph = create_default_network()
+    for edge in ((0, 1), (1, 2)):
+        graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+        graph[edge[1]][edge[0]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
     vehicles = _DEMAND_BUILDERS[demand](graph)
     if policy == "Coordinated":
         rate = 0.0
@@ -94,7 +101,9 @@ def _build_scenario(
     if disruption == "Halve road 1–2":
         reduce_road_capacity(graph, 1, 2, factor=0.5)
     elif disruption == "Close road 1–2":
-        close_road(graph, 1, 2)
+        # Keep the edge in the graph: existing vehicles may finish, while the
+        # routing layer skips edges marked closed for new route selection.
+        close_road(graph, 1, 2, remove_edges=False)
     routing_policy = "coordinated" if policy == "Coordinated" else "decentralized"
     return Simulation(graph, vehicles, routing_policy=routing_policy)
 
@@ -236,6 +245,7 @@ def _draw_network(simulation: Simulation):
 
     for u, v in graph.edges():
         rad = _EDGE_ARC_RAD if graph.has_edge(v, u) else 0.0
+        closed = graph[u][v].get("closed", False)
         ax.add_patch(
             FancyArrowPatch(
                 layout[u],
@@ -244,7 +254,9 @@ def _draw_network(simulation: Simulation):
                 arrowstyle="-|>",
                 mutation_scale=12,
                 linewidth=2.5,
-                color=cmap(norm(congestion.get((u, v), 0.0))),
+                color="#9ca3af" if closed else cmap(norm(congestion.get((u, v), 0.0))),
+                linestyle="--" if closed else "-",
+                alpha=0.7 if closed else 1.0,
                 shrinkA=14,
                 shrinkB=14,
                 zorder=1,
@@ -312,10 +324,26 @@ def _format_mean(mean: float | None) -> str:
 def _render_metrics(slot, simulation: Simulation) -> None:
     score = network_congestion_score(simulation.graph)
     mean = _format_mean(mean_journey_time(simulation.vehicles))
+    total_vehicles = len(simulation.vehicles)
+    completed_vehicles = completed_count(simulation.vehicles)
+    completion_rate = (
+        100.0 * completed_vehicles / total_vehicles if total_vehicles else 0.0
+    )
+    disruption = st.session_state.get("disruption", "None")
+    primary_capacity = simulation.graph[0][1]["capacity"]
+    if disruption == "Close road 1–2":
+        capacity_assumption = "Primary corridor: 2 vehicles before closure"
+    else:
+        capacity_assumption = (
+            f"Primary corridor: {EXPERIMENT_PRIMARY_CAPACITY:g} vehicles "
+            f"(active: {primary_capacity:g})"
+        )
     rows = (
         ("Timestep", str(simulation.current_step)),
+        ("Vehicles", str(total_vehicles)),
         ("In transit", str(len(simulation.active))),
-        ("Completed trips", str(completed_count(simulation.vehicles))),
+        ("Completed vehicles", str(completed_vehicles)),
+        ("Completion rate", f"{completion_rate:.0f}%"),
         ("Mean journey time (steps)", mean),
         ("Network congestion", f"{score:.3f}"),
     )
@@ -327,7 +355,14 @@ def _render_metrics(slot, simulation: Simulation) -> None:
             "<p style='margin:0 0 0.35rem;font-size:1.45rem;line-height:1.05'>"
             f"{value or '&nbsp;'}</p>"
         )
-    slot.markdown("".join(lines), unsafe_allow_html=True)
+    slot.markdown(
+        "".join(lines)
+        + "<p style='margin:0.8rem 0 0;font-size:0.8rem;opacity:0.85'>"
+        f"Active disruption: {disruption}</p>"
+        + "<p style='margin:0.05rem 0 0;font-size:0.8rem;opacity:0.85'>"
+        f"{capacity_assumption}</p>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render(map_slot, metric_slot, simulation: Simulation) -> None:
@@ -354,7 +389,12 @@ def main() -> None:
         [1, 1, 1.3, 1.4, 0.7]
     )
     with demand_col:
-        st.selectbox("Demand", DEMAND_OPTIONS, key="demand")
+        st.selectbox(
+            "Demand",
+            DEMAND_OPTIONS,
+            format_func=lambda level: f"{level} ({DEMAND_COUNTS[level]} vehicles)",
+            key="demand",
+        )
     with policy_col:
         st.selectbox(
             "Routing",
@@ -392,7 +432,10 @@ def main() -> None:
     map_col, metric_col = st.columns([4, 1])
     with map_col:
         map_slot = st.empty()
-        st.caption("Green: coordinated. Blue: navigation app. Dark grey: uninformed.")
+        st.caption(
+            "Green: coordinated. Blue: navigation app. Dark grey: uninformed. "
+            "A closed road is unavailable to new routes; vehicles already on it finish."
+        )
     with metric_col:
         metric_slot = st.empty()
 
