@@ -334,9 +334,17 @@ python scripts/run_routing_comparison.py
 python scripts/plot_routing_comparison.py
 ```
 
-The first command runs the 675-scenario matrix: static, selfish, and coordinated policies × low, medium, and high demand × 0%, 25%, 50%, 75%, and 100% adoption × no disruption, 50% remaining capacity, and closure × seeds 0–4. Each scenario releases a fixed demand wave every 10 steps from step 0 through the inclusive 100-step horizon. Road 1–2 is disrupted at step 10 and restored from pristine attributes at step 30. The runner records journey-time aggregates, completed journeys, total delay against pristine free-flow OD time, timestep-level directed-road congestion, peak network congestion, and threshold-based recovery status.
+The first command runs the 675-scenario matrix: static, selfish, and coordinated policies × low, medium, and high demand × 0%, 25%, 50%, 75%, and 100% adoption × no disruption, 50% remaining capacity, and closure × seeds 0–4. For this research experiment, the demand levels are 1, 5, and 10 vehicles per wave, the top corridor capacity is 2, two waves are released at steps 0 and 3, and the horizon is 120 steps. Road 1–2 is disrupted at step 15 and restored from pristine attributes at step 45. These settings create a finite, overlapping queue while leaving the baseline demand model unchanged. The runner records journey-time aggregates, completed journeys, total delay against pristine free-flow OD time, timestep-level directed-road congestion, peak network congestion, and threshold-based recovery status.
 
 Outputs are reproducible CSV files at `results/routing_comparison_summary.csv` and `results/routing_comparison_congestion.csv`; the plotting command writes `results/routing_comparison_journey_times.png`. Time and journey-time values are discrete simulation steps. Seeds are retained in every row, so comparisons represent repeated scenarios rather than a single mean. The network is synthetic and results are not evidence about real Perth traffic.
+
+The final five figures are generated with:
+
+```bash
+python scripts/generate_final_figures.py
+```
+
+The figures show both mean completed journey time and completion rate. This is important because severe static-routing queues can leave some vehicles unfinished by the finite horizon; those runs are reported rather than silently treated as completed.
 
 ## Network congestion visualisation
 
@@ -390,7 +398,7 @@ The following factors will be varied systematically:
 | Disruption | None, reduced road capacity, road closure |
 | Routing policy | Uninformed, selfish real-time, coordinated (extension) |
 
-The demand × adoption grid (no disruption) is recorded by `scripts/run_demand_adoption.py` at a single locked seed (`0`). The complete multi-seed routing comparison is recorded by `scripts/run_routing_comparison.py`. Disruption recovery is threshold-based and reports recovered, censored, no-excursion, or not-applicable status; routes remain locked at entry.
+The demand × adoption grid (no disruption) is recorded by `scripts/run_demand_adoption.py` at a single locked seed (`0`). The complete multi-seed routing comparison is recorded by `scripts/run_routing_comparison.py`. Disruption recovery is threshold-based and reports recovered, censored, no-excursion, or not-applicable status; routes remain locked at entry. A live closure retains the closed edge until vehicles already on it finish, while new route searches exclude that edge.
 
 ## Measures
 
@@ -410,16 +418,19 @@ Still planned for later issues:
 ## Expected outputs
 
 - Network diagrams coloured by congestion level (see `scripts/plot_network_congestion.py` → `results/network_congestion.png`).
-- Time-series plots of congestion after a disruption.
-- Average travel time versus navigation-app adoption rate.
-- **Comparisons of selfish and coordinated routing across demand levels** — use `compare_selfish_and_coordinated` in `src/routing.py` to quantify the system-wide benefit of central coordination (the "price of anarchy").
-- On the 15-vehicle halved-corridor scenario, coordinated routing achieves total journey time **53** vs selfish **58** (a saving of 5 steps), with the last two vehicles diverted to `0 → 3 → 4 → 5 → 2` to relieve the bottleneck.
+- `fig1_journey_time_vs_adoption.png`: journey time by adoption and demand.
+- `fig2_completion_rate.png`: completion rate by adoption and demand.
+- `fig3_congestion_after_disruption.png`: congestion response to capacity reduction and closure.
+- `fig4_demand_vs_journey_time.png`: demand comparison at low and high adoption.
+- `fig5_navigation_advantage.png`: reduction from selfish navigation relative to static routing.
+
+The coordinated-routing implementation remains available as an optional extension and is tested on the dedicated halved-corridor scenario; it is not presented as a headline result where the sustained-demand experiment does not separate it from selfish routing.
 
 ## Project status
 
 **Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement and a public in-transit snapshot (`in_transit_snapshot`), journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, a Streamlit presentation demo (`streamlit run app/demo.py`), baseline demand generation (low / medium / high corridor batches), the demand × adoption experiment runner (`run_demand_adoption_grid`, CSV `results/demand_adoption.csv`), **coordinated routing policy** (`routing_policy="coordinated"` on `Simulation`), the **selfish-vs-coordinated comparison utility** (`compare_selfish_and_coordinated` in `src/routing.py`), and the reproducible multi-seed routing comparison (`run_routing_comparison`, CSV outputs under `results/`) are implemented. Mid-trip re-routing and real map data remain out of scope.
 
-The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The demand × adoption baseline (seed `0`, no disruption) is produced by `scripts/run_demand_adoption.py` and `tests/test_experiments.py`. The next milestones are multi-seed repeats of that grid, scheduled disruption/restore composed into the same runner, continuous or multi-wave demand, and wiring `C(t)` collection. The rise-and-fall adoption hypothesis stays untested while routes are locked at entry.
+The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The research comparison now uses a finite overlapping demand schedule, explicit constrained-capacity assumptions, five fixed seeds, scheduled disruption/restore, and completion-rate reporting. The results support a narrower conclusion than the original hypothesis: navigation improves outcomes when the synthetic network is congested; this model does not establish a high-adoption rise-and-fall effect because routes are locked at entry and the coordinated policy is an optional extension.
 
 ## Repository layout
 
