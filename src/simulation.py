@@ -304,9 +304,15 @@ class Simulation:
 
             # All simple paths.
             try:
-                raw_paths = list(
-                    nx.all_simple_paths(self.graph, vehicle.origin, vehicle.destination)
-                )
+                raw_paths = [
+                    path for path in nx.all_simple_paths(
+                        self.graph, vehicle.origin, vehicle.destination
+                    )
+                    if all(
+                        not self.graph[u][v].get("closed", False)
+                        for u, v in zip(path, path[1:])
+                    )
+                ]
             except (nx.NetworkXNoPath, nx.NodeNotFound):
                 raw_paths = []
 

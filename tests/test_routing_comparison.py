@@ -48,7 +48,9 @@ def test_closure_is_removed_during_disruption_and_restored_afterward():
     )
     rows = result["congestion"]
     assert len([row for row in rows if row["timestep"] == 9]) == 12
-    assert len([row for row in rows if row["timestep"] == 10]) == 10
+    # Live experiments retain the closed edge so vehicles already on it can
+    # finish safely; new route searches exclude the marked edge.
+    assert len([row for row in rows if row["timestep"] == 10]) == 12
     assert len([row for row in rows if row["timestep"] == 30]) == 12
 
 

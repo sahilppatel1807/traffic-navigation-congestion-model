@@ -75,9 +75,17 @@ def find_shortest_route(
             f"origin and destination cannot be the same: {origin!r}"
         )
 
+    def edge_weight(u, v, attrs):
+        # A closed edge remains in the graph during a live disruption so
+        # vehicles already on it can complete.  It must not be a candidate for
+        # a new route.
+        if attrs.get("closed", False):
+            return None
+        return attrs[weight]
+
     try:
         return nx.shortest_path(
-            graph, source=origin, target=destination, weight=weight
+            graph, source=origin, target=destination, weight=edge_weight
         )
     except nx.NetworkXNoPath as exc:
         raise ValueError(

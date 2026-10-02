@@ -13,16 +13,13 @@ import networkx as nx
 from src.congestion import update_road_travel_time
 
 
-def close_road(graph: nx.DiGraph, u, v) -> nx.DiGraph:
-    """Fully close a physical road by removing both directed edges.
+def close_road(graph: nx.DiGraph, u, v, *, remove_edges: bool = True) -> nx.DiGraph:
+    """Fully close a physical road.
 
-    Requires directed edges ``(u, v)`` and ``(v, u)``. Removes both edges
-    (discarding their attributes), leaves nodes in place, mutates ``graph``
-    in place, and returns the same graph object. Does not refresh travel
-    times on remaining edges, check connectivity, or inspect occupancy.
-
-    Applying closure mid-run while vehicles may still reference removed
-    edges is unsupported for this milestone.
+    By default, removes both directed edges (the original helper behaviour).
+    When ``remove_edges=False`` the edges are retained and marked ``closed``;
+    this is safe for a mid-simulation disruption because vehicles already on
+    the road can finish while newly routed vehicles ignore it.
 
     Parameters
     ----------
@@ -46,8 +43,12 @@ def close_road(graph: nx.DiGraph, u, v) -> nx.DiGraph:
     if not graph.has_edge(v, u):
         raise ValueError(f"missing directed edge ({v!r}, {u!r})")
 
-    graph.remove_edge(u, v)
-    graph.remove_edge(v, u)
+    if remove_edges:
+        graph.remove_edge(u, v)
+        graph.remove_edge(v, u)
+    else:
+        graph[u][v]["closed"] = True
+        graph[v][u]["closed"] = True
     return graph
 
 

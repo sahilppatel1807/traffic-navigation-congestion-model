@@ -30,10 +30,15 @@ GRID_HORIZON = 100
 
 ROUTING_POLICIES: tuple[str, ...] = ("static", "selfish", "coordinated")
 DISRUPTION_TYPES: tuple[str, ...] = ("none", "capacity_reduction", "closure")
-COMPARISON_HORIZON = 100
-WAVE_INTERVAL = 10
-DISRUPTION_STEP = 10
-RESTORE_STEP = 30
+COMPARISON_HORIZON = 120
+# The baseline presets remain 1/5/15 vehicles, but the comparison experiment
+# uses a sustained finite demand period so vehicles overlap on the network.
+EXPERIMENT_DEMAND_LEVELS = {"low": 1, "medium": 5, "high": 10}
+DEMAND_RELEASE_END = 3
+WAVE_INTERVAL = 3
+DISRUPTION_STEP = 15
+RESTORE_STEP = 45
+EXPERIMENT_PRIMARY_CAPACITY = 2
 DISRUPTED_ROAD = (1, 2)
 REDUCED_CAPACITY_FACTOR = 0.5
 COMPARISON_SEEDS = (0, 1, 2, 3, 4)
@@ -94,8 +99,8 @@ def run_routing_comparison(
     seeds: Iterable[int] = COMPARISON_SEEDS,
     horizon: int = COMPARISON_HORIZON,
     wave_interval: int = WAVE_INTERVAL,
-    disruption_step: int = DISRUPTION_STEP,
-    restore_step: int = RESTORE_STEP,
+    disruption_step: int | None = None,
+    restore_step: int | None = None,
     routing_policies: Iterable[str] = ROUTING_POLICIES,
     demand_levels: dict[str, int] | None = None,
     adoption_rates: Iterable[float] = ADOPTION_RATES,
@@ -116,10 +121,20 @@ def run_routing_comparison(
         raise ValueError(f"horizon must be >= 1, got {horizon}")
     if wave_interval < 1:
         raise ValueError(f"wave_interval must be >= 1, got {wave_interval}")
+    # Keep short test/demo horizons useful while retaining the full
+    # experiment's 30/60 schedule. Explicit caller values always win.
+    if disruption_step is None:
+        disruption_step = (
+            horizon // 4 if horizon < 2 * RESTORE_STEP else DISRUPTION_STEP
+        )
+    if restore_step is None:
+        restore_step = (
+            (3 * horizon) // 4 if horizon < 2 * RESTORE_STEP else RESTORE_STEP
+        )
     if not 0 <= disruption_step <= restore_step <= horizon:
         raise ValueError("disruption and restore steps must lie within the horizon")
 
-    levels = DEMAND_LEVELS if demand_levels is None else demand_levels
+    levels = EXPERIMENT_DEMAND_LEVELS if demand_levels is None else demand_levels
     summary_rows: list[dict[str, Any]] = []
     congestion_rows: list[dict[str, Any]] = []
     for policy in routing_policies:
@@ -171,13 +186,21 @@ def _run_routing_scenario(
         policy, demand_level, adoption_rate, disruption, seed
     )
     graph = create_default_network()
+    # Calibrate only the experiment network: the top corridor is deliberately
+    # capacity-constrained while the lower corridor remains an available
+    # alternative. This makes route choice consequential without changing the
+    # baseline model or its validation fixtures.
+    for edge in ((0, 1), (1, 0), (1, 2), (2, 1)):
+        graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
     pristine = {
         (u, v): copy.deepcopy(attrs)
         for u, v, attrs in graph.edges(data=True)
     }
     vehicles: list[Vehicle] = []
     vehicle_number = 0
-    for start_time in range(0, horizon + 1, wave_interval):
+    for start_time in range(
+        0, min(horizon, DEMAND_RELEASE_END) + 1, wave_interval
+    ):
         wave = build_corridor_demand(graph, vehicles_per_wave)
         for vehicle in wave:
             vehicle.vehicle_id = f"{scenario_id}-vehicle-{vehicle_number}"
@@ -325,11 +348,18 @@ def _apply_scheduled_event(
                 graph, *DISRUPTED_ROAD, factor=REDUCED_CAPACITY_FACTOR
             )
         elif disruption == "closure":
-            close_road(graph, *DISRUPTED_ROAD)
+            # Retain closed edges during live experiments so vehicles that
+            # entered just before the event can finish their route safely.
+            # The routing layer excludes edges marked ``closed``.
+            close_road(graph, *DISRUPTED_ROAD, remove_edges=False)
     if disruption != "none" and timestep == restore_step:
         u, v = DISRUPTED_ROAD
-        graph.add_edge(u, v, **copy.deepcopy(pristine[(u, v)]))
-        graph.add_edge(v, u, **copy.deepcopy(pristine[(v, u)]))
+        for a, b in ((u, v), (v, u)):
+            occupancy = graph[a].get(b, {}).get("occupancy", 0)
+            restored = copy.deepcopy(pristine[(a, b)])
+            restored["occupancy"] = occupancy
+            restored.pop("closed", None)
+            graph.add_edge(a, b, **restored)
 
 
 def _recovery_fields(
