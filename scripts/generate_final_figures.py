@@ -23,8 +23,13 @@ import numpy as np
 SUMMARY = _ROOT / "results" / "routing_comparison_summary.csv"
 CONGESTION = _ROOT / "results" / "routing_comparison_congestion.csv"
 OUT = _ROOT / "results" / "figures"
-POLICIES = ("static", "selfish", "coordinated")
-COLORS = {"static": "#377eb8", "selfish": "#ff7f00", "coordinated": "#4daf4a"}
+POLICIES = ("static", "selfish", "shared_navigation", "coordinated")
+COLORS = {
+    "static": "#377eb8",
+    "selfish": "#ff7f00",
+    "shared_navigation": "#e41a1c",
+    "coordinated": "#4daf4a",
+}
 DEMAND_ORDER = ("low", "medium", "high")
 ADOPTION_ORDER = (0.0, 0.25, 0.5, 0.75, 1.0)
 
