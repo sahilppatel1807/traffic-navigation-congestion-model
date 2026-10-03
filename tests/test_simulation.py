@@ -178,6 +178,66 @@ def test_nav_app_auto_route_uses_live_travel_time_shortest_path():
     assert vehicle.route == ["A", "C"]
 
 
+def test_shared_navigation_assigns_identical_routes_from_one_snapshot():
+    """Same-step navigation users in one OD group share one live route."""
+    graph = _diverging_weight_graph()
+    vehicles = [
+        Vehicle(
+            vehicle_id=f"shared-{i}",
+            origin="A",
+            destination="C",
+            uses_navigation_app=True,
+        )
+        for i in range(3)
+    ]
+    # With the live snapshot, A→C is shortest for all three. Sequential
+    # selfish entry would make later users see a different edge cost.
+    sim = Simulation(graph, vehicles, routing_policy="shared_navigation")
+    sim.step()
+
+    assert [vehicle.route for vehicle in vehicles] == [["A", "C"]] * 3
+
+
+def test_shared_navigation_keeps_uninformed_vehicles_on_static_routes():
+    graph = _diverging_weight_graph()
+    nav = Vehicle("nav", "A", "C", uses_navigation_app=True)
+    uninformed = Vehicle("static", "A", "C", uses_navigation_app=False)
+    sim = Simulation(graph, [nav, uninformed], routing_policy="shared_navigation")
+    sim.step()
+
+    assert nav.route == ["A", "C"]
+    assert uninformed.route == ["A", "B", "C"]
+
+
+def test_shared_navigation_excludes_closed_roads_for_new_vehicles():
+    graph = _diverging_weight_graph()
+    graph["A"]["C"]["closed"] = True
+    vehicles = [
+        Vehicle(f"shared-{i}", "A", "C", uses_navigation_app=True)
+        for i in range(2)
+    ]
+    sim = Simulation(graph, vehicles, routing_policy="shared_navigation")
+    sim.step()
+
+    assert [vehicle.route for vehicle in vehicles] == [["A", "B", "C"]] * 2
+
+
+def test_shared_navigation_high_demand_concentrates_on_capacity_limited_corridor():
+    from src.adoption import assign_navigation_adoption
+    from src.demand import build_corridor_demand
+
+    graph = create_default_network()
+    for u, v in ((0, 1), (1, 2), (1, 0), (2, 1)):
+        graph[u][v]["capacity"] = 2
+    vehicles = build_corridor_demand(graph, 10)
+    assign_navigation_adoption(vehicles, 1.0, seed=0)
+    sim = Simulation(graph, vehicles, routing_policy="shared_navigation")
+    sim.step()
+
+    assert all(vehicle.route == [0, 1, 2] for vehicle in vehicles)
+    assert graph[0][1]["occupancy"] > graph[0][1]["capacity"]
+
+
 def test_pre_set_route_wins_over_nav_app_flag():
     graph = _diverging_weight_graph()
     vehicle = Vehicle(

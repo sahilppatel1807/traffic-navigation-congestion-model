@@ -19,6 +19,11 @@ Entry auto-routing chooses Dijkstra weights from each vehicle's
 are locked at entry; same-step due vehicles are still routed then entered in
 list order, so later selfish entrants can see earlier occupancy.
 
+When ``routing_policy="shared_navigation"`` is set, navigation users due on
+the same step are grouped by origin/destination and receive one route from a
+single pre-entry traffic snapshot. Uninformed vehicles still use static
+free-flow routing. Routes remain locked after entry.
+
 When ``routing_policy="coordinated"`` is set on a :class:`Simulation`, a
 central controller groups vehicles releasing on the same step, enumerates
 candidate route distributions, evaluates each by running a deep-copied
@@ -103,7 +108,8 @@ class Simulation:
             (``completion_time is not None``) are rejected.
         routing_policy:
             The routing policy to use for unrouted vehicles at release.
-            Defaults to ``"decentralized"``. Use ``"coordinated"`` for the
+            Defaults to ``"decentralized"``. Use ``"shared_navigation"`` for
+            synchronized live recommendations or ``"coordinated"`` for the
             central coordinated routing policy.
 
         Raises
@@ -214,8 +220,66 @@ class Simulation:
         """Release vehicles whose ``start_time`` equals ``current_step``."""
         if self.routing_policy == "coordinated":
             self._enter_due_vehicles_coordinated()
+        elif self.routing_policy == "shared_navigation":
+            self._enter_due_vehicles_shared_navigation()
         else:
             self._enter_due_vehicles_decentralized()
+
+    def _enter_due_vehicles_shared_navigation(self) -> None:
+        """Enter due vehicles using synchronized recommendations for nav users.
+
+        All live routes are calculated before any due vehicle enters. This is
+        the shared traffic snapshot: vehicles in one origin/destination group
+        receive the same route, while uninformed vehicles retain static
+        free-flow routing. A route already assigned by a caller remains
+        locked, matching the behaviour of the other policies.
+        """
+        due = [
+            vehicle
+            for vehicle in self.vehicles
+            if vehicle not in self._in_transit
+            and vehicle not in self.completed
+            and vehicle.start_time == self.current_step
+        ]
+
+        shared_routes: dict[tuple[Any, Any], list[Any]] = {}
+        for vehicle in due:
+            if not vehicle.uses_navigation_app or vehicle.route is not None:
+                continue
+            key = (vehicle.origin, vehicle.destination)
+            if key not in shared_routes:
+                shared_routes[key] = find_shortest_route(
+                    self.graph,
+                    vehicle.origin,
+                    vehicle.destination,
+                    weight="current_travel_time",
+                )
+
+        for vehicle in due:
+            if vehicle.route is None:
+                route = (
+                    shared_routes.get((vehicle.origin, vehicle.destination))
+                    if vehicle.uses_navigation_app
+                    else None
+                )
+                if route is None:
+                    route = find_shortest_route(
+                        self.graph,
+                        vehicle.origin,
+                        vehicle.destination,
+                        weight="free_flow_time",
+                    )
+                vehicle.set_route(route, self.graph)
+
+            assert vehicle.route is not None
+            if len(vehicle.route) < 2:
+                raise ValueError(
+                    f"vehicle {vehicle.vehicle_id!r} route must contain at "
+                    f"least two nodes, got {vehicle.route!r}"
+                )
+            u, v = vehicle.route[0], vehicle.route[1]
+            self._enter_edge(vehicle, u, v, route_idx=0)
+            self.active.append(vehicle)
 
     def _enter_due_vehicles_decentralized(self) -> None:
         """Decentralized (selfish/uninformed) entry: route each vehicle independently."""

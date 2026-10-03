@@ -28,7 +28,9 @@ from src.vehicle import Vehicle
 # Same horizon as the uninformed baseline validation script.
 GRID_HORIZON = 100
 
-ROUTING_POLICIES: tuple[str, ...] = ("static", "selfish", "coordinated")
+ROUTING_POLICIES: tuple[str, ...] = (
+    "static", "selfish", "shared_navigation", "coordinated"
+)
 DISRUPTION_TYPES: tuple[str, ...] = ("none", "capacity_reduction", "closure")
 COMPARISON_HORIZON = 120
 # The baseline presets remain 1/5/15 vehicles, but the comparison experiment
@@ -216,7 +218,13 @@ def _run_routing_scenario(
     simulation = Simulation(
         graph,
         vehicles,
-        routing_policy="coordinated" if policy == "coordinated" else "decentralized",
+        routing_policy=(
+            "coordinated"
+            if policy == "coordinated"
+            else "shared_navigation"
+            if policy == "shared_navigation"
+            else "decentralized"
+        ),
     )
     free_flow_od_time = _pristine_free_flow_journey_time(graph)
     congestion_scores: list[float] = []

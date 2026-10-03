@@ -42,20 +42,19 @@ from src.network import create_default_network
 from src.simulation import Simulation
 from src.visualisation import DEFAULT_NODE_POSITIONS
 
-# Opening scene and the Presentation Demo button: high demand, selfish
-# routing, full adoption, seed 0, and road 1–2 at half of the constrained
-# primary-corridor capacity used by the routing comparison experiment.
+# Opening scene and the Presentation Demo button: high demand, synchronized
+# navigation, full adoption, seed 0, and no disruption.
 PRESENTATION_DEMAND = "High"
-PRESENTATION_POLICY = "Selfish"
+PRESENTATION_POLICY = "Shared navigation"
 PRESENTATION_ADOPTION = 1.0
-PRESENTATION_DISRUPTION = "Halve road 1–2"
+PRESENTATION_DISRUPTION = "None"
 PRESENTATION_SEED = 0
 
 DEMAND_OPTIONS = ("Low", "Medium", "High")
 DEMAND_COUNTS = {
     level.title(): count for level, count in EXPERIMENT_DEMAND_LEVELS.items()
 }
-POLICY_OPTIONS = ("Uninformed", "Selfish", "Coordinated")
+POLICY_OPTIONS = ("Uninformed", "Selfish", "Shared navigation", "Coordinated")
 ADOPTION_OPTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
 DISRUPTION_OPTIONS = ("None", "Halve road 1–2", "Close road 1–2")
 
@@ -104,7 +103,10 @@ def _build_scenario(
         # Keep the edge in the graph: existing vehicles may finish, while the
         # routing layer skips edges marked closed for new route selection.
         close_road(graph, 1, 2, remove_edges=False)
-    routing_policy = "coordinated" if policy == "Coordinated" else "decentralized"
+    routing_policy = {
+        "Coordinated": "coordinated",
+        "Shared navigation": "shared_navigation",
+    }.get(policy, "decentralized")
     return Simulation(graph, vehicles, routing_policy=routing_policy)
 
 
@@ -131,7 +133,7 @@ def _has_more_to_do(simulation: Simulation) -> bool:
 
 
 def _on_policy_change() -> None:
-    """Uninformed/Coordinated routing has no adoption mix. Returning to Selfish stays at 0%."""
+    """Only policies with navigation users expose the adoption mix."""
     if st.session_state.policy in ("Uninformed", "Coordinated"):
         st.session_state.adoption = 0.0
 
@@ -329,6 +331,14 @@ def _render_metrics(slot, simulation: Simulation) -> None:
     completion_rate = (
         100.0 * completed_vehicles / total_vehicles if total_vehicles else 0.0
     )
+    primary_route = [0, 1, 2]
+    assigned_routes = [
+        vehicle.route for vehicle in simulation.vehicles if vehicle.route is not None
+    ]
+    primary_count = sum(route == primary_route for route in assigned_routes)
+    primary_share = (
+        100.0 * primary_count / len(assigned_routes) if assigned_routes else 0.0
+    )
     disruption = st.session_state.get("disruption", "None")
     primary_capacity = simulation.graph[0][1]["capacity"]
     if disruption == "Close road 1–2":
@@ -346,6 +356,7 @@ def _render_metrics(slot, simulation: Simulation) -> None:
         ("Completion rate", f"{completion_rate:.0f}%"),
         ("Mean journey time (steps)", mean),
         ("Network congestion", f"{score:.3f}"),
+        ("Primary route", f"{primary_count}/{total_vehicles} ({primary_share:.0f}%)"),
     )
     lines = []
     for label, value in rows:
@@ -433,7 +444,8 @@ def main() -> None:
     with map_col:
         map_slot = st.empty()
         st.caption(
-            "Green: coordinated. Blue: navigation app. Dark grey: uninformed. "
+            "Green: coordinated. Blue: navigation users. Dark grey: uninformed. "
+            "Shared recommendations can concentrate vehicles on one route. "
             "A closed road is unavailable to new routes; vehicles already on it finish."
         )
     with metric_col:

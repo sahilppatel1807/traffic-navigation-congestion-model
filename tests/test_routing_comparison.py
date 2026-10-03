@@ -61,3 +61,15 @@ def test_recovery_status_is_not_applicable_without_disruption():
     row = result["summary"][0]
     assert row["recovery_status"] == "not_applicable"
     assert row["recovered"] is None
+
+
+def test_shared_navigation_is_available_in_routing_comparison_runner():
+    result = _small_result(
+        routing_policies=("shared_navigation",),
+        demand_levels={"high": 10},
+        adoption_rates=(1.0,),
+        disruptions=("none",),
+    )
+    row = result["summary"][0]
+    assert row["policy"] == "shared_navigation"
+    assert row["nav_count"] == 10
