@@ -144,9 +144,18 @@ Pure sum of a named edge attribute along consecutive nodes of a planned route. D
 
 Navigation-app users choose the route with the lowest *currently estimated personal travel time*. This is decentralised routing: every driver tries to minimise their own trip time.
 
+### Shared navigation
+
+Navigation users entering on the same timestep and travelling between the same
+origin and destination receive one shortest route from the same pre-entry live
+traffic snapshot. Routes are locked after entry, so high adoption can
+concentrate vehicles on one corridor. Uninformed vehicles continue to use
+free-flow shortest paths.
+
 Per-vehicle flag `uses_navigation_app` (default `False`) controls entry auto-routing when no route is pre-assigned:
 - `False` → Dijkstra on `free_flow_time` (uninformed / static).
-- `True` → Dijkstra on live `current_travel_time` (selfish).
+- `True` → Dijkstra on live `current_travel_time` (selfish), or one shared
+  live route per origin/destination group under `shared_navigation`.
 
 The route chosen at entry stays fixed for the whole journey (no mid-trip re-routing in this milestone). A pre-assigned route always wins; the flag is unused for that vehicle’s entry. Same-step due vehicles are still routed then entered in list order, so later selfish entrants can see earlier occupancy and may choose different paths — simultaneous entry is not order-independent.
 
@@ -226,7 +235,7 @@ from src.simulation import Simulation, InTransitRecord
 ```
 
 **`Simulation(graph, vehicles, routing_policy="decentralized")`**
-Constructs a discrete-time simulation from a directed road graph and a flat list of pre-built `Vehicle` agents. Public attributes: `graph`, `vehicles`, `current_step` (starts at `0`), `active` (in-transit only), `completed`, and `routing_policy`. Raises `ValueError` if any vehicle already has a non-`None` `completion_time`. Set `routing_policy="coordinated"` to activate the central coordinated routing controller (see [Coordinated routing](#coordinated-routing-central-controller) above).
+Constructs a discrete-time simulation from a directed road graph and a flat list of pre-built `Vehicle` agents. Public attributes: `graph`, `vehicles`, `current_step` (starts at `0`), `active` (in-transit only), `completed`, and `routing_policy`. Raises `ValueError` if any vehicle already has a non-`None` `completion_time`. Set `routing_policy="shared_navigation"` for synchronized live recommendations or `routing_policy="coordinated"` to activate the central coordinated routing controller (see [Coordinated routing](#coordinated-routing-central-controller) above).
 
 **`step() → None`**
 Processes the current clock value then increments by one. Phase order: (1) enter vehicles due at `current_step` (auto-route if needed — `free_flow_time` for uninformed vehicles, `current_travel_time` for `uses_navigation_app=True`; place onto first edge); (2) advance in-transit vehicles (consume dwell; leave/enter edges or complete); (3) refresh all edge travel times via BPR. Mutates state in place; returns `None`.

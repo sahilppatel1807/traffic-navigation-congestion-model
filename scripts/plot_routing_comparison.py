@@ -22,7 +22,7 @@ def main() -> None:
         rows = list(csv.DictReader(handle))
     if not rows:
         raise ValueError(f"no rows found in {SUMMARY_INPUT}")
-    policies = ("static", "selfish", "coordinated")
+    policies = ("static", "selfish", "shared_navigation", "coordinated")
     labels = []
     means = []
     for policy in policies:
@@ -38,7 +38,7 @@ def main() -> None:
     ax.bar(labels, means)
     ax.set_xlabel("Routing policy (mean across demand, adoption, disruption, and seeds)")
     ax.set_ylabel("Mean journey time (simulation steps)")
-    ax.set_title("Static, selfish, and coordinated routing comparison")
+    ax.set_title("Static, selfish, shared-navigation, and coordinated routing comparison")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
     FIGURE_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
