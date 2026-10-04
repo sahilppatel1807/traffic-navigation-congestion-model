@@ -388,12 +388,19 @@ def test_empty_vehicle_list_is_allowed():
 
 
 def _halved_corridor_scenario():
-    """15-vehicle high-demand scenario with road 1-2 halved."""
+    """15-vehicle high-demand scenario with road 1-2 halved.
+
+    All vehicles are navigation users so the coordinated controller applies
+    to the full cohort. Tests that assert uninformed baselines should use
+    ``assign_navigation_adoption(vehicles, 0.0, seed=0)`` explicitly.
+    """
+    from src.adoption import assign_navigation_adoption
     from src.demand import build_high_demand
     from src.disruption import reduce_road_capacity
 
     graph = create_default_network()
     vehicles = build_high_demand(graph)
+    assign_navigation_adoption(vehicles, 1.0, seed=0)
     reduce_road_capacity(graph, 1, 2, factor=0.5)
     return graph, vehicles
 
@@ -450,11 +457,11 @@ def test_coordinated_routing_all_vehicles_complete():
 
 
 def test_coordinated_routing_raises_value_error_when_no_path():
-    """ValueError raised when a vehicle has no path to its destination."""
+    """ValueError raised when a navigation vehicle has no path to its destination."""
     graph = nx.DiGraph()
     graph.add_edge(0, 1, free_flow_time=1.0, capacity=10, occupancy=0, current_travel_time=1.0)
     graph.add_node(2)  # disconnected
-    vehicle = Vehicle(vehicle_id="v0", origin=0, destination=2, start_time=0)
+    vehicle = Vehicle(vehicle_id="v0", origin=0, destination=2, start_time=0, uses_navigation_app=True)
 
     sim = Simulation(graph, [vehicle], routing_policy="coordinated")
     with pytest.raises(ValueError, match="no path exists"):
@@ -474,9 +481,9 @@ def test_coordinated_routing_raises_value_error_when_search_space_too_large():
     for mid in (10, 11, 12):
         graph.add_edge(0, mid, **attrs)
         graph.add_edge(mid, 2, **attrs)
-    # 57 vehicles on 0→2: C(60, 3) = 34220 > 32768.
+    # 57 navigation vehicles on 0→2: C(60, 3) = 34220 > 32768.
     vehicles = [
-        Vehicle(vehicle_id=f"v{i}", origin=0, destination=2, start_time=0)
+        Vehicle(vehicle_id=f"v{i}", origin=0, destination=2, start_time=0, uses_navigation_app=True)
         for i in range(57)
     ]
     sim = Simulation(graph, vehicles, routing_policy="coordinated")
