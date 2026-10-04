@@ -193,12 +193,18 @@ def test_unreachable_pair_raises_value_error():
 
 
 def _halved_corridor_scenario():
-    """15-vehicle high-demand scenario with road 1–2 halved."""
+    """15-vehicle high-demand scenario with road 1–2 halved.
+
+    All vehicles are navigation users so the coordinated controller applies
+    to the full cohort.
+    """
+    from src.adoption import assign_navigation_adoption
     from src.demand import build_high_demand
     from src.disruption import reduce_road_capacity
 
     graph = create_default_network()
     vehicles = build_high_demand(graph)
+    assign_navigation_adoption(vehicles, 1.0, seed=0)
     reduce_road_capacity(graph, 1, 2, factor=0.5)
     return graph, vehicles
 
