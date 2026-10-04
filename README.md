@@ -259,6 +259,12 @@ from src.metrics import (
     journey_time,
     completed_count,
     mean_journey_time,
+    final_completion_timestep,
+    makespan,
+    maximum_occupancy,
+    route_distribution,
+    route_diversity,
+    most_common_route,
     road_congestion,
     simulation_summary,
     network_congestion_score,
@@ -276,11 +282,20 @@ Counts vehicles with a non-`None` `completion_time`.
 **`mean_journey_time(vehicles) → float | None`**
 Mean of completed journey times only. Incomplete vehicles are excluded; returns `None` when none are complete.
 
+**`final_completion_timestep` / `makespan`**
+Return the latest completion clock value and elapsed time from the earliest completed release, respectively. Both return `None` when no vehicle has completed.
+
+**`maximum_occupancy(graph) → float`**
+Return the greatest current vehicle count on an open directed edge. `Simulation.peak_occupancy` retains the greatest value observed over its run.
+
+**`route_distribution`, `route_diversity`, `most_common_route`**
+Count assigned node-list routes deterministically, count distinct routes, and return the most common route with its count and share. Unassigned vehicles are excluded.
+
 **`road_congestion(graph) → dict[tuple, float]`**
 Maps each directed edge `(u, v)` to `min(occupancy / capacity, 1.0)`. Raises `TypeError` / `ValueError` for invalid capacity or occupancy.
 
 **`simulation_summary(simulation) → dict`**
-Plain dictionary with keys `completed_count`, `mean_journey_time`, and `road_congestion`. Reads `simulation.vehicles` and `simulation.graph` without changing state.
+Plain dictionary with completion, makespan, occupancy, route-concentration, and `road_congestion` fields. Reads `simulation.vehicles` and `simulation.graph` without changing state.
 
 **`network_congestion_score(graph) → float`**
 Uncapped capacity-weighted mean `sum(occupancy) / sum(capacity)` over open edges (closed/absent edges excluded). Returns `math.nan` when there are no open edges.
@@ -314,6 +329,9 @@ Builds `n` bare vehicles for the corridor. Raises `TypeError` if `n` is not an i
 **`build_low_demand` / `build_medium_demand` / `build_high_demand`**
 Thin wrappers around the preset batch sizes.
 
+**`build_scheduled_corridor_demand(graph, schedule, ...)`**
+Builds a reproducible finite schedule from a mapping of non-negative release timestep to positive vehicle count. `build_staggered_corridor_demand(graph)` is the focused presentation preset: six vehicles at timestep `0` and four at timestep `1`.
+
 ### Validate the baseline (low / medium / high)
 
 From the repository root (after installing requirements):
@@ -343,9 +361,17 @@ python scripts/run_routing_comparison.py
 python scripts/plot_routing_comparison.py
 ```
 
-The first command runs the 675-scenario matrix: static, selfish, and coordinated policies × low, medium, and high demand × 0%, 25%, 50%, 75%, and 100% adoption × no disruption, 50% remaining capacity, and closure × seeds 0–4. For this research experiment, the demand levels are 1, 5, and 10 vehicles per wave, the top corridor capacity is 2, two waves are released at steps 0 and 3, and the horizon is 120 steps. Road 1–2 is disrupted at step 15 and restored from pristine attributes at step 45. These settings create a finite, overlapping queue while leaving the baseline demand model unchanged. The runner records journey-time aggregates, completed journeys, total delay against pristine free-flow OD time, timestep-level directed-road congestion, peak network congestion, and threshold-based recovery status.
+The first command runs the 900-scenario matrix: static/uninformed, selfish, shared-navigation, and coordinated policies × low, medium, and high demand × 0%, 25%, 50%, 75%, and 100% adoption × no disruption, 50% remaining capacity, and closure × seeds 0–4. For this research experiment, the demand levels are 1, 5, and 10 vehicles per wave, the top corridor capacity is 2, two waves are released at steps 0 and 3, and the horizon is 120 steps. Road 1–2 is disrupted at step 15 and restored from pristine attributes at step 45. These settings create a finite, overlapping queue while leaving the baseline demand model unchanged. The runner records journey-time aggregates, completed journeys, total delay against pristine free-flow OD time, timestep-level directed-road congestion, peak network congestion, and threshold-based recovery status.
 
 Outputs are reproducible CSV files at `results/routing_comparison_summary.csv` and `results/routing_comparison_congestion.csv`; the plotting command writes `results/routing_comparison_journey_times.png`. Time and journey-time values are discrete simulation steps. Seeds are retained in every row, so comparisons represent repeated scenarios rather than a single mean. The network is synthetic and results are not evidence about real Perth traffic.
+
+### Run the focused presentation scenario
+
+```bash
+python scripts/run_presentation_scenario.py
+```
+
+This separate 120-row matrix uses the staggered `6 + 4` schedule, primary-corridor capacity `2`, policies `uninformed`, `selfish`, `shared_navigation`, and `coordinated`, adoption `0%`, `50%`, and `100%`, no disruption or a 50% remaining-capacity disruption, and seeds `0–4`. It records completed count/rate, mean journey time, final completion timestep, makespan, peak occupancy, route diversity, the most-common and primary-route counts/shares, and peak network congestion in `results/focused_presentation_summary.csv`; the companion figure is `results/figures/focused_presentation_metrics.png`. The lower entrance is deliberately slower only in this focused scenario, preserving the network topology and layout while making sequential selfish diversion visible.
 
 The final five figures are generated with:
 
@@ -390,15 +416,15 @@ From the repository root, after installing dependencies:
 streamlit run app/demo.py
 ```
 
-The app opens on the Presentation Demo scene's first frame: high demand (10 vehicles), selfish routing, 100% adoption, seed `0`, a primary-corridor capacity of 2 vehicles, and road 1–2 at half capacity. The demand control labels low, medium, and high as 1, 5, and 10 vehicles. The clock is `0` and no vehicle has entered. **Presentation Demo** writes those settings again and plays. **Run** rebuilds from the controls now on screen and plays from the start. **Step** advances one tick (or builds the opening frame if nothing is loaded). **Reset** rebuilds and holds the opening frame. Playback waits half a second between frames and leaves the last frame up. Moving a demand, routing, adoption, disruption, or seed control does not change the map or the numbers until a button is pressed.
+The app opens on the Presentation Demo scene's first frame: the focused high-demand schedule (six vehicles at timestep `0`, four at timestep `1`), shared navigation, 100% adoption, seed `0`, primary-corridor capacity `2`, and no disruption. **Presentation Demo** writes those settings again and plays. **Run** rebuilds from the controls now on screen and plays from the start. **Step** advances one tick (or builds the opening frame if nothing is loaded). **Reset** rebuilds and holds the opening frame. Playback waits half a second between frames and leaves the last frame up. Moving a demand, routing, adoption, disruption, or seed control does not change the map or the numbers until a button is pressed.
 
-Uninformed routing forces adoption to 0% and disables the slider. Switching back to Selfish leaves adoption at 0% until the slider is moved. Selfish adoption snaps to 0%, 25%, 50%, 75%, and 100%. Disruption is `None`, `Halve road 1–2`, or `Close road 1–2`, applied only when a scene is built. Navigation users are blue; uninformed drivers are dark grey. Several vehicles on one road are offset along that road for drawing only. Roads use the same occupancy/capacity yellow–orange–red scale as the static figure. A closed road is shown as a dashed unavailable road and excluded from new routes; vehicles already on it are allowed to finish. The right-hand column shows the timestep, total and in-transit vehicles, completed vehicles, completion rate, mean journey time in steps (blank until the first arrival), network congestion, the active disruption, and the primary-corridor capacity assumption.
+Uninformed routing forces adoption to 0% and disables the slider. Switching back to Selfish leaves adoption at 0% until the slider is moved. Selfish adoption snaps to 0%, 25%, 50%, 75%, and 100%. Disruption is `None`, `Halve road 1–2`, or `Close road 1–2`, applied only when a scene is built. Vehicle colours are dark grey (uninformed), blue (selfish), orange/red (shared navigation), and green (coordinated). Several vehicles on one road are offset along that road for drawing only. Roads use the same `YlOrRd` occupancy/capacity scale as the static figure. A closed road is shown as a dashed unavailable road and excluded from new routes; vehicles already on it are allowed to finish. The right-hand column shows completion and makespan metrics, peak occupancy, route diversity/concentration, the primary-route share, and a compact route-distribution bar.
 
 On the default corridor, selfish and uninformed drivers still take `0 → 1 → 2` when road 1–2 is open, because routes lock at entry while that road is empty. The live contrast is the disruption control: no disruption, the capacity cut, and closure.
 
 ## Experimental design
 
-The following factors will be varied systematically:
+The following factors are varied systematically in the broader matrix:
 
 | Factor | Scenarios |
 | --- | --- |
@@ -413,8 +439,10 @@ The demand × adoption grid (no disruption) is recorded by `scripts/run_demand_a
 
 The model currently records (via `src/metrics.py`):
 
-- completed journey count;
+- completed journey count and completion rate;
 - mean journey time (simulation steps; incomplete vehicles excluded);
+- final completion timestep and makespan;
+- current/peak occupancy and route diversity/concentration;
 - directed-road congestion ratios (occupancy/capacity, capped at `1.0`); and
 - pure congestion-recovery helpers (`network_congestion_score`, `pre_disruption_congestion`, `congestion_recovery`) on synthetic or caller-built `C(t)` series.
 
@@ -433,11 +461,11 @@ Still planned for later issues:
 - `fig4_demand_vs_journey_time.png`: demand comparison at low and high adoption.
 - `fig5_navigation_advantage.png`: reduction from selfish navigation relative to static routing.
 
-The coordinated-routing implementation remains available as an optional extension and is tested on the dedicated halved-corridor scenario; it is not presented as a headline result where the sustained-demand experiment does not separate it from selfish routing.
+The focused scenario shows that synchronized recommendations can create or worsen a bottleneck under high demand and limited capacity. This is a conditional mechanism result, not a claim that adoption always causes congestion: outcomes depend on demand timing, capacity, topology, disruption, and routing policy.
 
 ## Project status
 
-**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement and a public in-transit snapshot (`in_transit_snapshot`), journey/network metrics (including pure congestion-recovery helpers), network congestion visualisation, a Streamlit presentation demo (`streamlit run app/demo.py`), baseline demand generation (low / medium / high corridor batches), the demand × adoption experiment runner (`run_demand_adoption_grid`, CSV `results/demand_adoption.csv`), **coordinated routing policy** (`routing_policy="coordinated"` on `Simulation`), the **selfish-vs-coordinated comparison utility** (`compare_selfish_and_coordinated` in `src/routing.py`), and the reproducible multi-seed routing comparison (`run_routing_comparison`, CSV outputs under `results/`) are implemented. Mid-trip re-routing and real map data remain out of scope.
+**Current stage:** Synthetic network topology, BPR congestion travel-time calculation, vehicle agents, static (uninformed) shortest-path routing, real-time route-cost estimation (`estimate_route_cost`), selfish entry auto-routing via per-vehicle `uses_navigation_app`, seeded navigation-app adoption-rate helpers (`assign_navigation_adoption`, `ADOPTION_RATES`), scheduled demand (`build_scheduled_corridor_demand`, `build_staggered_corridor_demand`), reduced-road-capacity disruption (`reduce_road_capacity`), full road-closure disruption (`close_road`), the discrete simulation clock with vehicle movement and a public in-transit snapshot (`in_transit_snapshot`), journey/network/route metrics (including pure congestion-recovery helpers), network congestion visualisation, a Streamlit presentation demo (`streamlit run app/demo.py`), baseline demand generation (low / medium / high corridor batches), the demand × adoption experiment runner (`run_demand_adoption_grid`, CSV `results/demand_adoption.csv`), **coordinated routing policy** (`routing_policy="coordinated"` on `Simulation`), the **selfish-vs-coordinated comparison utility** (`compare_selfish_and_coordinated` in `src/routing.py`), the reproducible multi-seed routing comparison (`run_routing_comparison`, CSV outputs under `results/`), and the focused presentation experiment (`run_focused_presentation_experiment`, CSV `results/focused_presentation_summary.csv`) are implemented. Mid-trip re-routing and real map data remain out of scope.
 
 The first modelling milestone — rising demand produces rising travel times under static routing — is validated by `scripts/validate_baseline_demand.py` and `tests/test_demand.py`. The research comparison now uses a finite overlapping demand schedule, explicit constrained-capacity assumptions, five fixed seeds, scheduled disruption/restore, and completion-rate reporting. The results support a narrower conclusion than the original hypothesis: navigation improves outcomes when the synthetic network is congested; this model does not establish a high-adoption rise-and-fall effect because routes are locked at entry and the coordinated policy is an optional extension.
 

@@ -34,10 +34,25 @@ from matplotlib.colors import Normalize
 from matplotlib.patches import FancyArrowPatch
 
 from src.adoption import assign_navigation_adoption
-from src.demand import build_corridor_demand
+from src.demand import build_corridor_demand, build_staggered_corridor_demand
 from src.disruption import close_road, reduce_road_capacity
-from src.experiments import EXPERIMENT_DEMAND_LEVELS, EXPERIMENT_PRIMARY_CAPACITY
-from src.metrics import completed_count, mean_journey_time, network_congestion_score, road_congestion
+from src.experiments import (
+    EXPERIMENT_DEMAND_LEVELS,
+    EXPERIMENT_PRIMARY_CAPACITY,
+    configure_focused_network,
+)
+from src.metrics import (
+    completed_count,
+    final_completion_timestep,
+    makespan,
+    maximum_occupancy,
+    mean_journey_time,
+    most_common_route,
+    network_congestion_score,
+    road_congestion,
+    route_distribution,
+    route_diversity,
+)
 from src.network import create_default_network
 from src.simulation import Simulation
 from src.visualisation import DEFAULT_NODE_POSITIONS
@@ -64,7 +79,8 @@ _PLAYBACK_STEP_CAP = 1000
 
 _EDGE_ARC_RAD = 0.12
 _CONGESTION_CMAP = "YlOrRd"
-_NAVIGATION_COLOR = "#1f77b4"
+_SELFISH_COLOR = "#1f77b4"
+_SHARED_NAVIGATION_COLOR = "#e6550d"
 _UNINFORMED_COLOR = "#333333"
 _COORDINATED_COLOR = "#2ca02c"
 # Pulls dots off the node discs and onto the visible road stroke.
@@ -85,13 +101,18 @@ def _build_scenario(
     adoption: float,
     disruption: str,
     seed: int,
+    focused: bool = False,
 ) -> Simulation:
     """Build one scene from the controls and return it at the opening frame."""
     graph = create_default_network()
-    for edge in ((0, 1), (1, 2)):
-        graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
-        graph[edge[1]][edge[0]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
-    vehicles = _DEMAND_BUILDERS[demand](graph)
+    if focused:
+        configure_focused_network(graph)
+        vehicles = build_staggered_corridor_demand(graph)
+    else:
+        for edge in ((0, 1), (1, 2)):
+            graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+            graph[edge[1]][edge[0]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+        vehicles = _DEMAND_BUILDERS[demand](graph)
     if policy == "Coordinated":
         rate = 0.0
     else:
@@ -170,6 +191,7 @@ def _on_presentation() -> None:
         adoption=PRESENTATION_ADOPTION,
         disruption=PRESENTATION_DISRUPTION,
         seed=PRESENTATION_SEED,
+        focused=True,
     )
     st.session_state.playing = True
 
@@ -189,6 +211,7 @@ def _boot() -> None:
         adoption=PRESENTATION_ADOPTION,
         disruption=PRESENTATION_DISRUPTION,
         seed=PRESENTATION_SEED,
+        focused=True,
     )
     st.session_state.playing = False
     st.session_state.booted = True
@@ -274,8 +297,10 @@ def _draw_network(simulation: Simulation):
         vehicle = by_id[record.vehicle_id]
         if simulation.routing_policy == "coordinated":
             color = _COORDINATED_COLOR
+        elif simulation.routing_policy == "shared_navigation" and vehicle.uses_navigation_app:
+            color = _SHARED_NAVIGATION_COLOR
         elif vehicle.uses_navigation_app:
-            color = _NAVIGATION_COLOR
+            color = _SELFISH_COLOR
         else:
             color = _UNINFORMED_COLOR
         ax.scatter(
@@ -331,14 +356,16 @@ def _render_metrics(slot, simulation: Simulation) -> None:
     completion_rate = (
         100.0 * completed_vehicles / total_vehicles if total_vehicles else 0.0
     )
-    primary_route = [0, 1, 2]
-    assigned_routes = [
-        vehicle.route for vehicle in simulation.vehicles if vehicle.route is not None
-    ]
-    primary_count = sum(route == primary_route for route in assigned_routes)
+    primary_route = (0, 1, 2)
+    assigned_routes = route_distribution(simulation.vehicles)
+    assigned_count = sum(assigned_routes.values())
+    primary_count = assigned_routes.get(primary_route, 0)
     primary_share = (
-        100.0 * primary_count / len(assigned_routes) if assigned_routes else 0.0
+        100.0 * primary_count / assigned_count if assigned_count else 0.0
     )
+    common_route, common_count, common_share = most_common_route(simulation.vehicles)
+    final_timestep = final_completion_timestep(simulation.vehicles)
+    route_name = "—" if common_route is None else "→".join(map(str, common_route))
     disruption = st.session_state.get("disruption", "None")
     primary_capacity = simulation.graph[0][1]["capacity"]
     if disruption == "Close road 1–2":
@@ -355,8 +382,15 @@ def _render_metrics(slot, simulation: Simulation) -> None:
         ("Completed vehicles", str(completed_vehicles)),
         ("Completion rate", f"{completion_rate:.0f}%"),
         ("Mean journey time (steps)", mean),
+        ("Final completion / makespan", f"{final_timestep if final_timestep is not None else '—'} / {makespan(simulation.vehicles) if makespan(simulation.vehicles) is not None else '—'}"),
+        (
+            "Maximum occupancy",
+            f"{max(simulation.peak_occupancy, maximum_occupancy(simulation.graph)):.0f}",
+        ),
         ("Network congestion", f"{score:.3f}"),
-        ("Primary route", f"{primary_count}/{total_vehicles} ({primary_share:.0f}%)"),
+        ("Route diversity", str(route_diversity(simulation.vehicles))),
+        ("Most common route", f"{common_count}/{assigned_count} ({common_share:.0%})"),
+        ("Primary route", f"{primary_count}/{assigned_count} ({primary_share:.0f}%)"),
     )
     lines = []
     for label, value in rows:
@@ -366,8 +400,24 @@ def _render_metrics(slot, simulation: Simulation) -> None:
             "<p style='margin:0 0 0.35rem;font-size:1.45rem;line-height:1.05'>"
             f"{value or '&nbsp;'}</p>"
         )
+    route_rows = []
+    max_route_count = max(assigned_routes.values(), default=1)
+    for route, count in sorted(
+        assigned_routes.items(), key=lambda item: (-item[1], tuple(map(str, item[0])))
+    ):
+        label = "→".join(map(str, route))
+        width = 100.0 * count / max_route_count
+        route_rows.append(
+            f"<div style='font-size:0.72rem;margin-top:0.2rem'>{label} · {count}</div>"
+            f"<div style='background:#e5e7eb;height:0.32rem;border-radius:0.2rem'>"
+            f"<div style='background:#e6550d;width:{width:.1f}%;height:100%;border-radius:0.2rem'></div></div>"
+        )
     slot.markdown(
         "".join(lines)
+        + "<p style='margin:0.8rem 0 0;font-size:0.8rem;opacity:0.85'>"
+        f"Most common: {route_name} ({common_count}/{assigned_count})</p>"
+        + "<p style='margin:0.1rem 0 0;font-size:0.75rem;opacity:0.7'>Route distribution</p>"
+        + "".join(route_rows)
         + "<p style='margin:0.8rem 0 0;font-size:0.8rem;opacity:0.85'>"
         f"Active disruption: {disruption}</p>"
         + "<p style='margin:0.05rem 0 0;font-size:0.8rem;opacity:0.85'>"
@@ -444,8 +494,9 @@ def main() -> None:
     with map_col:
         map_slot = st.empty()
         st.caption(
-            "Green: coordinated. Blue: navigation users. Dark grey: uninformed. "
-            "Shared recommendations can concentrate vehicles on one route. "
+            "Green: coordinated · blue: selfish navigation · orange/red: shared navigation · "
+            "dark grey: uninformed. Roads use YlOrRd occupancy/capacity colours. "
+            "Shared recommendations can synchronize vehicles onto one route. "
             "A closed road is unavailable to new routes; vehicles already on it finish."
         )
     with metric_col:
