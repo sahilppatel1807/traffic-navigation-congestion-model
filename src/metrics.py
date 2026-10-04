@@ -35,6 +35,7 @@ congestion_recovery(C, t_star, t_r, W, K, horizon) -> dict
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Sequence
 from typing import Any, Iterable, Mapping
 
@@ -116,6 +117,68 @@ def mean_journey_time(vehicles: Iterable[Vehicle]) -> float | None:
     return sum(durations) / len(durations)
 
 
+def route_distribution(vehicles: Iterable[Vehicle]) -> dict[tuple[Any, ...], int]:
+    """Return counts of assigned routes, deterministically keyed by node tuple."""
+    counts: Counter[tuple[Any, ...]] = Counter(
+        tuple(vehicle.route)
+        for vehicle in vehicles
+        if vehicle.route is not None
+    )
+    return dict(counts)
+
+
+def route_diversity(vehicles: Iterable[Vehicle]) -> int:
+    """Return the number of distinct assigned routes."""
+    return len(route_distribution(vehicles))
+
+
+def most_common_route(
+    vehicles: Iterable[Vehicle],
+) -> tuple[tuple[Any, ...] | None, int, float]:
+    """Return ``(route, count, share)`` for the most common assigned route."""
+    distribution = route_distribution(vehicles)
+    total = sum(distribution.values())
+    if not distribution:
+        return None, 0, 0.0
+    route, count = min(
+        distribution.items(),
+        key=lambda item: (-item[1], tuple(str(node) for node in item[0])),
+    )
+    return route, count, count / total
+
+
+def maximum_occupancy(graph: nx.DiGraph) -> float:
+    """Return the greatest current vehicle count on any open directed edge."""
+    return max(
+        (float(attrs.get("occupancy", 0.0)) for _u, _v, attrs in graph.edges(data=True)),
+        default=0.0,
+    )
+
+
+def final_completion_timestep(vehicles: Iterable[Vehicle]) -> int | None:
+    """Return the latest recorded completion timestep, or ``None``."""
+    completions = [
+        vehicle.completion_time
+        for vehicle in vehicles
+        if vehicle.completion_time is not None
+    ]
+    return max(completions) if completions else None
+
+
+def makespan(vehicles: Iterable[Vehicle]) -> int | None:
+    """Return elapsed time from the earliest release to the last completion."""
+    materialized = list(vehicles)
+    final = final_completion_timestep(materialized)
+    if final is None:
+        return None
+    starts = [
+        vehicle.start_time
+        for vehicle in materialized
+        if vehicle.completion_time is not None
+    ]
+    return final - min(starts)
+
+
 def road_congestion(graph: nx.DiGraph) -> dict[tuple[Any, Any], float]:
     """Return each directed edge's occupancy/capacity ratio, capped at ``1.0``.
 
@@ -149,12 +212,18 @@ def simulation_summary(simulation: Simulation) -> dict[str, Any]:
     """Return a plain-dictionary snapshot of journey and road metrics.
 
     Consumes ``simulation.vehicles`` and ``simulation.graph`` without mutating
-    either. Keys: ``completed_count``, ``mean_journey_time``, ``road_congestion``.
+    either. Includes completion, makespan, occupancy, route, and road metrics.
     """
     vehicles = simulation.vehicles
     return {
         "completed_count": completed_count(vehicles),
         "mean_journey_time": mean_journey_time(vehicles),
+        "final_completion_timestep": final_completion_timestep(vehicles),
+        "makespan": makespan(vehicles),
+        "maximum_occupancy": maximum_occupancy(simulation.graph),
+        "peak_occupancy": simulation.peak_occupancy,
+        "route_diversity": route_diversity(vehicles),
+        "most_common_route": most_common_route(vehicles),
         "road_congestion": road_congestion(simulation.graph),
     }
 

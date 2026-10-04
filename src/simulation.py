@@ -130,6 +130,7 @@ class Simulation:
         self.current_step = 0
         self.active: list[Vehicle] = []
         self.completed: list[Vehicle] = []
+        self.peak_occupancy = 0.0
 
         # Private in-transit map. route_idx is the index of edge_u in
         # vehicle.route (avoids first-match scans). assigned_dwell is fixed
@@ -147,6 +148,14 @@ class Simulation:
         self._enter_due_vehicles()
         self._advance_in_transit()
         update_all_travel_times(self.graph)
+        self.peak_occupancy = max(
+            self.peak_occupancy,
+            max(
+                (float(attrs.get("occupancy", 0.0))
+                 for _u, _v, attrs in self.graph.edges(data=True)),
+                default=0.0,
+            ),
+        )
         self.current_step += 1
 
     def run(self, until: int) -> list[Vehicle]:
