@@ -12,14 +12,23 @@ import math
 from typing import Any, Iterable
 
 from src.adoption import ADOPTION_RATES, assign_navigation_adoption
-from src.demand import DEMAND_LEVELS, build_corridor_demand
+from src.demand import (
+    DEMAND_LEVELS,
+    build_corridor_demand,
+    build_staggered_corridor_demand,
+)
 from src.disruption import close_road, reduce_road_capacity
 from src.metrics import (
     completed_count,
     congestion_recovery,
     journey_time,
+    final_completion_timestep,
+    maximum_occupancy,
+    makespan,
     mean_journey_time,
+    most_common_route,
     network_congestion_score,
+    route_diversity,
 )
 from src.network import create_default_network
 from src.simulation import Simulation
@@ -44,6 +53,33 @@ EXPERIMENT_PRIMARY_CAPACITY = 2
 DISRUPTED_ROAD = (1, 2)
 REDUCED_CAPACITY_FACTOR = 0.5
 COMPARISON_SEEDS = (0, 1, 2, 3, 4)
+
+# Focused presentation experiment: a finite 6 + 4 staggered demand schedule.
+FOCUSED_POLICIES: tuple[str, ...] = (
+    "uninformed", "selfish", "shared_navigation", "coordinated"
+)
+FOCUSED_ADOPTION_RATES: tuple[float, ...] = (0.0, 0.5, 1.0)
+FOCUSED_DISRUPTIONS: tuple[str, ...] = ("none", "capacity_reduction")
+FOCUSED_SEEDS = (0, 1, 2, 3, 4)
+FOCUSED_HORIZON = 100
+FOCUSED_ALTERNATIVE_TRAVEL_TIME = 12.0
+
+
+def configure_focused_network(graph) -> Any:
+    """Apply the focused scenario's capacity and live-choice calibration.
+
+    The topology and node layout stay unchanged.  The lower entrance is made
+    deliberately unattractive at free flow so sequential selfish entry can
+    divert vehicle-by-vehicle, while a shared recommendation can keep one
+    synchronized cohort on the primary corridor.  This isolates the herding
+    contrast without changing the general network constructor.
+    """
+    for edge in ((0, 1), (1, 0), (1, 2), (2, 1)):
+        graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+    for edge in ((0, 3), (3, 0)):
+        graph[edge[0]][edge[1]]["free_flow_time"] = FOCUSED_ALTERNATIVE_TRAVEL_TIME
+        graph[edge[0]][edge[1]]["current_travel_time"] = FOCUSED_ALTERNATIVE_TRAVEL_TIME
+    return graph
 
 
 def run_demand_adoption_grid(*, seed: int = 0) -> list[dict]:
@@ -75,6 +111,129 @@ def run_demand_adoption_grid(*, seed: int = 0) -> list[dict]:
         for rate in ADOPTION_RATES:
             rows.append(_run_cell(demand_level, n, rate, seed))
     return rows
+
+
+def run_focused_presentation_experiment(
+    *,
+    policies: Iterable[str] = FOCUSED_POLICIES,
+    adoption_rates: Iterable[float] = FOCUSED_ADOPTION_RATES,
+    disruptions: Iterable[str] = FOCUSED_DISRUPTIONS,
+    seeds: Iterable[int] = FOCUSED_SEEDS,
+    horizon: int = FOCUSED_HORIZON,
+) -> list[dict[str, Any]]:
+    """Run the reproducible 6+4 presentation scenario matrix.
+
+    The focused matrix is deliberately separate from the broader sustained
+    routing-comparison grid. It crosses four routing policies, 0/50/100%
+    adoption, no disruption or a halved primary capacity, and seeds 0--4.
+    """
+    if horizon < 1:
+        raise ValueError(f"horizon must be >= 1, got {horizon}")
+    rows: list[dict[str, Any]] = []
+    for policy in policies:
+        if policy not in FOCUSED_POLICIES:
+            raise ValueError(f"unknown focused routing policy: {policy!r}")
+        for adoption_rate in adoption_rates:
+            if adoption_rate not in FOCUSED_ADOPTION_RATES:
+                raise ValueError(
+                    f"focused adoption must be one of {FOCUSED_ADOPTION_RATES}, "
+                    f"got {adoption_rate!r}"
+                )
+            for disruption in disruptions:
+                if disruption not in FOCUSED_DISRUPTIONS:
+                    raise ValueError(
+                        f"unknown focused disruption: {disruption!r}"
+                    )
+                for seed in seeds:
+                    rows.append(
+                        _run_focused_scenario(
+                            policy=policy,
+                            adoption_rate=float(adoption_rate),
+                            disruption=disruption,
+                            seed=seed,
+                            horizon=horizon,
+                        )
+                    )
+    return rows
+
+
+def _run_focused_scenario(
+    *,
+    policy: str,
+    adoption_rate: float,
+    disruption: str,
+    seed: int,
+    horizon: int,
+) -> dict[str, Any]:
+    graph = create_default_network()
+    configure_focused_network(graph)
+
+    vehicles = build_staggered_corridor_demand(graph)
+    assign_navigation_adoption(vehicles, adoption_rate, seed=seed)
+    if policy == "uninformed":
+        for vehicle in vehicles:
+            vehicle.uses_navigation_app = False
+    if disruption == "capacity_reduction":
+        reduce_road_capacity(
+            graph, *DISRUPTED_ROAD, factor=REDUCED_CAPACITY_FACTOR
+        )
+
+    simulation = Simulation(
+        graph,
+        vehicles,
+        routing_policy=(
+            "coordinated"
+            if policy == "coordinated"
+            else "shared_navigation"
+            if policy == "shared_navigation"
+            else "decentralized"
+        ),
+    )
+    peak_occupancy = maximum_occupancy(graph)
+    peak_congestion = network_congestion_score(graph)
+    steps = 0
+    while steps < horizon and (
+        simulation.active or simulation._has_pending_or_future()
+    ):
+        simulation.step()
+        peak_occupancy = max(peak_occupancy, maximum_occupancy(graph))
+        peak_congestion = max(peak_congestion, network_congestion_score(graph))
+        steps += 1
+
+    route, common_count, common_share = most_common_route(vehicles)
+    primary_route = (0, 1, 2)
+    assigned = sum(1 for vehicle in vehicles if vehicle.route is not None)
+    primary_count = sum(tuple(vehicle.route or ()) == primary_route for vehicle in vehicles)
+    completion_count = completed_count(vehicles)
+    return {
+        "scenario_id": (
+            f"policy-{policy}__adoption-{adoption_rate:g}"
+            f"__disruption-{disruption}__seed-{seed}"
+        ),
+        "policy": policy,
+        "adoption_rate": adoption_rate,
+        "nav_count": sum(vehicle.uses_navigation_app for vehicle in vehicles),
+        "disruption": disruption,
+        "disruption_factor": (
+            REDUCED_CAPACITY_FACTOR if disruption == "capacity_reduction" else None
+        ),
+        "seed": seed,
+        "horizon": horizon,
+        "vehicle_count": len(vehicles),
+        "completed_count": completion_count,
+        "completion_rate": completion_count / len(vehicles),
+        "mean_journey_time": mean_journey_time(vehicles),
+        "final_completion_timestep": final_completion_timestep(vehicles),
+        "makespan": makespan(vehicles),
+        "maximum_occupancy": peak_occupancy,
+        "route_diversity": route_diversity(vehicles),
+        "most_common_route": route,
+        "most_common_route_count": common_count,
+        "most_common_route_share": common_share,
+        "primary_route_count": primary_count,
+        "primary_route_share": primary_count / assigned if assigned else 0.0,
+        "peak_network_congestion": peak_congestion,
+    }
 
 
 def _run_cell(demand_level: str, n: int, rate: float, seed: int) -> dict:

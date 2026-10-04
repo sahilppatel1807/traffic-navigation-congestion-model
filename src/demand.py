@@ -7,6 +7,7 @@ simulation auto-routes on entry using free-flow travel times.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import networkx as nx
@@ -76,6 +77,81 @@ def build_corridor_demand(
         )
         vehicles.append(vehicle)
     return vehicles
+
+
+def build_scheduled_corridor_demand(
+    graph: nx.DiGraph,
+    schedule: Mapping[int, int],
+    *,
+    origin: Any = DEFAULT_ORIGIN,
+    destination: Any = DEFAULT_DESTINATION,
+    vehicle_id_prefix: str = "scheduled",
+) -> list[Vehicle]:
+    """Build corridor vehicles from a reproducible release schedule.
+
+    ``schedule`` maps a non-negative simulation timestep to a positive number
+    of vehicles.  The returned list is ordered by release time and then by
+    vehicle number.  Existing batch builders intentionally remain unchanged;
+    this helper is for finite, staggered presentation and experiment demand.
+    """
+    if not isinstance(schedule, Mapping):
+        raise TypeError(
+            f"schedule must be a mapping of timestep to count, got "
+            f"{type(schedule).__name__}"
+        )
+    if not isinstance(vehicle_id_prefix, str):
+        raise TypeError("vehicle_id_prefix must be a string")
+    if not schedule:
+        raise ValueError("schedule must contain at least one release")
+
+    vehicles: list[Vehicle] = []
+    vehicle_number = 0
+    for start_time, count in sorted(schedule.items()):
+        if not isinstance(start_time, int) or isinstance(start_time, bool):
+            raise TypeError(
+                f"schedule timesteps must be integers, got {type(start_time).__name__}"
+            )
+        if start_time < 0:
+            raise ValueError(f"schedule timesteps must be >= 0, got {start_time}")
+        if not isinstance(count, int) or isinstance(count, bool):
+            raise TypeError(
+                f"schedule counts must be integers, got {type(count).__name__}"
+            )
+        if count < 1:
+            raise ValueError(f"schedule counts must be >= 1, got {count}")
+
+        for _ in range(count):
+            vehicles.append(
+                Vehicle.create_for_network(
+                    graph,
+                    vehicle_id=f"{vehicle_id_prefix}-{vehicle_number}",
+                    origin=origin,
+                    destination=destination,
+                    start_time=start_time,
+                )
+            )
+            vehicle_number += 1
+    return vehicles
+
+
+def build_staggered_corridor_demand(
+    graph: nx.DiGraph,
+    *,
+    first_wave: int = 6,
+    second_wave: int = 4,
+    first_release: int = 0,
+    second_release: int = 1,
+    origin: Any = DEFAULT_ORIGIN,
+    destination: Any = DEFAULT_DESTINATION,
+) -> list[Vehicle]:
+    """Build the focused presentation schedule: six vehicles, then four."""
+    return build_scheduled_corridor_demand(
+        graph,
+        {first_release: first_wave, second_release: second_wave},
+        origin=origin,
+        destination=destination,
+        vehicle_id_prefix="staggered",
+    )
 
 
 def build_low_demand(
