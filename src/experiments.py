@@ -62,17 +62,26 @@ FOCUSED_ADOPTION_RATES: tuple[float, ...] = (0.0, 0.5, 1.0)
 FOCUSED_DISRUPTIONS: tuple[str, ...] = ("none", "capacity_reduction")
 FOCUSED_SEEDS = (0, 1, 2, 3, 4)
 FOCUSED_HORIZON = 100
-FOCUSED_ALTERNATIVE_TRAVEL_TIME = 12.0
+FOCUSED_ALTERNATIVE_TRAVEL_TIME = 0.5
 
 
 def configure_focused_network(graph) -> Any:
     """Apply the focused scenario's capacity and live-choice calibration.
 
-    The topology and node layout stay unchanged.  The lower entrance is made
-    deliberately unattractive at free flow so sequential selfish entry can
-    divert vehicle-by-vehicle, while a shared recommendation can keep one
-    synchronized cohort on the primary corridor.  This isolates the herding
-    contrast without changing the general network constructor.
+    The topology and node layout stay unchanged.  The primary corridor
+    (edges 0→1, 1→0, 1→2, 2→1) is capacity-constrained at 2 so congestion
+    builds quickly.  The alternative entrance (edges 0→3, 3→0) is given a
+    very short free-flow travel time of 0.5 steps, making the complete
+    alternative path (0→3→2) approximately 4 free-flow steps — still longer
+    than the primary at free flow, but reachable as congestion rises.
+
+    This calibration ensures:
+    - The primary route is preferred before congestion.
+    - Selfish users split route-by-route as occupancy rises.
+    - Shared navigation users all receive the same single snapshot-based
+      recommendation as a cohort, causing visible herding onto one route.
+    - Coordinated routing optimises only navigation users; non-navigation
+      vehicles are fixed on free-flow routes.
     """
     for edge in ((0, 1), (1, 0), (1, 2), (2, 1)):
         graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
