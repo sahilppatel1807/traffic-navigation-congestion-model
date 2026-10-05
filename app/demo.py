@@ -34,12 +34,11 @@ from matplotlib.colors import Normalize
 from matplotlib.patches import FancyArrowPatch
 
 from src.adoption import assign_navigation_adoption
-from src.demand import build_corridor_demand, build_staggered_corridor_demand
+from src.demand import build_corridor_demand
 from src.disruption import close_road, reduce_road_capacity
 from src.experiments import (
     EXPERIMENT_DEMAND_LEVELS,
     EXPERIMENT_PRIMARY_CAPACITY,
-    configure_focused_network,
 )
 from src.metrics import (
     completed_count,
@@ -57,19 +56,11 @@ from src.network import create_default_network
 from src.simulation import Simulation
 from src.visualisation import DEFAULT_NODE_POSITIONS
 
-# Opening scene and the Presentation Demo button: high demand, synchronized
-# navigation, full adoption, seed 0, and no disruption.
-PRESENTATION_DEMAND = "High"
-PRESENTATION_POLICY = "Shared navigation"
-PRESENTATION_ADOPTION = 1.0
-PRESENTATION_DISRUPTION = "None"
-PRESENTATION_SEED = 0
-
 DEMAND_OPTIONS = ("Low", "Medium", "High")
 DEMAND_COUNTS = {
     level.title(): count for level, count in EXPERIMENT_DEMAND_LEVELS.items()
 }
-POLICY_OPTIONS = ("Uninformed", "Selfish", "Shared navigation", "Coordinated")
+POLICY_OPTIONS = ("Selfish", "Coordinated")
 ADOPTION_OPTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
 DISRUPTION_OPTIONS = ("None", "Halve road 1–2", "Close road 1–2")
 
@@ -80,8 +71,7 @@ _PLAYBACK_STEP_CAP = 1000
 _EDGE_ARC_RAD = 0.12
 _CONGESTION_CMAP = "YlOrRd"
 _SELFISH_COLOR = "#1f77b4"
-_SHARED_NAVIGATION_COLOR = "#e6550d"
-_UNINFORMED_COLOR = "#333333"
+_NO_NAV_COLOR = "#333333"
 _COORDINATED_COLOR = "#2ca02c"
 # Pulls dots off the node discs and onto the visible road stroke.
 _EDGE_DRAW_START = 0.12
@@ -101,22 +91,17 @@ def _build_scenario(
     adoption: float,
     disruption: str,
     seed: int,
-    focused: bool = False,
 ) -> Simulation:
     """Build one scene from the controls and return it at the opening frame."""
     graph = create_default_network()
-    if focused:
-        configure_focused_network(graph)
-        vehicles = build_staggered_corridor_demand(graph)
-    else:
-        for edge in ((0, 1), (1, 2)):
-            graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
-            graph[edge[1]][edge[0]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
-        vehicles = _DEMAND_BUILDERS[demand](graph)
+    for edge in ((0, 1), (1, 2)):
+        graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+        graph[edge[1]][edge[0]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+    vehicles = _DEMAND_BUILDERS[demand](graph)
     if policy == "Coordinated":
-        rate = 0.0
+        rate = 1.0  # all vehicles are navigation users so the controller can route them
     else:
-        rate = 0.0 if policy == "Uninformed" else float(adoption)
+        rate = float(adoption)
     assign_navigation_adoption(vehicles, rate, seed=int(seed))
     if disruption == "Halve road 1–2":
         reduce_road_capacity(graph, 1, 2, factor=0.5)
@@ -124,10 +109,7 @@ def _build_scenario(
         # Keep the edge in the graph: existing vehicles may finish, while the
         # routing layer skips edges marked closed for new route selection.
         close_road(graph, 1, 2, remove_edges=False)
-    routing_policy = {
-        "Coordinated": "coordinated",
-        "Shared navigation": "shared_navigation",
-    }.get(policy, "decentralized")
+    routing_policy = "coordinated" if policy == "Coordinated" else "decentralized"
     return Simulation(graph, vehicles, routing_policy=routing_policy)
 
 
@@ -154,8 +136,8 @@ def _has_more_to_do(simulation: Simulation) -> bool:
 
 
 def _on_policy_change() -> None:
-    """Only policies with navigation users expose the adoption mix."""
-    if st.session_state.policy in ("Uninformed", "Coordinated"):
+    """Only Coordinated locks out the adoption slider."""
+    if st.session_state.policy == "Coordinated":
         st.session_state.adoption = 0.0
 
 
@@ -179,39 +161,21 @@ def _on_reset() -> None:
     st.session_state.simulation = _scenario_from_controls()
 
 
-def _on_presentation() -> None:
-    st.session_state.demand = PRESENTATION_DEMAND
-    st.session_state.policy = PRESENTATION_POLICY
-    st.session_state.adoption = PRESENTATION_ADOPTION
-    st.session_state.disruption = PRESENTATION_DISRUPTION
-    st.session_state.seed = PRESENTATION_SEED
-    st.session_state.simulation = _build_scenario(
-        demand=PRESENTATION_DEMAND,
-        policy=PRESENTATION_POLICY,
-        adoption=PRESENTATION_ADOPTION,
-        disruption=PRESENTATION_DISRUPTION,
-        seed=PRESENTATION_SEED,
-        focused=True,
-    )
-    st.session_state.playing = True
-
-
 def _boot() -> None:
-    """Open on the presentation scene's first frame, before any playback."""
+    """Open on a visually interesting first frame: Selfish routing at 50% adoption."""
     if st.session_state.get("booted"):
         return
-    st.session_state.demand = PRESENTATION_DEMAND
-    st.session_state.policy = PRESENTATION_POLICY
-    st.session_state.adoption = PRESENTATION_ADOPTION
-    st.session_state.disruption = PRESENTATION_DISRUPTION
-    st.session_state.seed = PRESENTATION_SEED
+    st.session_state.demand = "Medium"
+    st.session_state.policy = "Selfish"
+    st.session_state.adoption = 0.5
+    st.session_state.disruption = "None"
+    st.session_state.seed = 0
     st.session_state.simulation = _build_scenario(
-        demand=PRESENTATION_DEMAND,
-        policy=PRESENTATION_POLICY,
-        adoption=PRESENTATION_ADOPTION,
-        disruption=PRESENTATION_DISRUPTION,
-        seed=PRESENTATION_SEED,
-        focused=True,
+        demand="Medium",
+        policy="Selfish",
+        adoption=0.5,
+        disruption="None",
+        seed=0,
     )
     st.session_state.playing = False
     st.session_state.booted = True
@@ -297,12 +261,10 @@ def _draw_network(simulation: Simulation):
         vehicle = by_id[record.vehicle_id]
         if simulation.routing_policy == "coordinated":
             color = _COORDINATED_COLOR
-        elif simulation.routing_policy == "shared_navigation" and vehicle.uses_navigation_app:
-            color = _SHARED_NAVIGATION_COLOR
         elif vehicle.uses_navigation_app:
             color = _SELFISH_COLOR
         else:
-            color = _UNINFORMED_COLOR
+            color = _NO_NAV_COLOR
         ax.scatter(
             [x],
             [y],
@@ -469,35 +431,27 @@ def main() -> None:
             options=list(ADOPTION_OPTIONS),
             format_func=lambda rate: f"{int(rate * 100)}%",
             key="adoption",
-            disabled=st.session_state.policy in ("Uninformed", "Coordinated"),
+            disabled=st.session_state.policy == "Coordinated",
         )
     with disruption_col:
         st.selectbox("Disruption", DISRUPTION_OPTIONS, key="disruption")
     with seed_col:
         st.number_input("Seed", min_value=0, step=1, key="seed")
 
-    run_col, step_col, reset_col, demo_col = st.columns(4)
+    run_col, step_col, reset_col = st.columns(3)
     with run_col:
         st.button("Run", on_click=_on_run, width="stretch")
     with step_col:
         st.button("Step", on_click=_on_step, width="stretch")
     with reset_col:
         st.button("Reset", on_click=_on_reset, width="stretch")
-    with demo_col:
-        st.button(
-            "Presentation Demo",
-            on_click=_on_presentation,
-            width="stretch",
-        )
 
     map_col, metric_col = st.columns([4, 1])
     with map_col:
         map_slot = st.empty()
         st.caption(
-            "Green: coordinated · blue: selfish navigation · orange/red: shared navigation · "
-            "dark grey: uninformed. Roads use YlOrRd occupancy/capacity colours. "
-            "Shared recommendations can synchronize vehicles onto one route. "
-            "A closed road is unavailable to new routes; vehicles already on it finish."
+            "Green: coordinated · Blue: selfish (nav) · Dark grey: selfish (no nav). "
+            "Roads use YlOrRd occupancy/capacity colours."
         )
     with metric_col:
         metric_slot = st.empty()
