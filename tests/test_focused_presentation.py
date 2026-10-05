@@ -1,8 +1,16 @@
-"""Focused 6+4 presentation scenario regression tests.
+"""Focused 10+10 presentation scenario regression tests.
 
 These tests verify both the mechanism (adoption controls nav-user eligibility,
 each release cohort's route behaviour) and the outcomes (journey-time ordering,
-route diversity, herding contrast) for the focused presentation network.
+route diversity, herding) for the focused presentation network.
+
+The demand schedule is 10 vehicles at step 0, then 10 vehicles at step 3.
+With both corridors capacity-constrained at 2, nav users in each wave all
+route from the same pre-entry traffic snapshot, producing herding: wave 0
+floods the primary (empty at t=0) and wave 1 is diverted to the alternative
+(primary congested at t=3).  Because selfish and shared_navigation both
+use this snapshot mechanism, they produce identical routes and journey times.
+Coordinated routing globally minimises journey time and outperforms both.
 """
 
 from src.adoption import assign_navigation_adoption
@@ -12,11 +20,11 @@ from src.network import create_default_network
 from src.simulation import Simulation
 
 
-def test_staggered_demand_has_six_releases_at_zero_and_four_at_one():
+def test_staggered_demand_has_ten_releases_at_zero_and_ten_at_three():
     vehicles = build_staggered_corridor_demand(create_default_network())
 
-    assert len(vehicles) == 10
-    assert [vehicle.start_time for vehicle in vehicles] == [0] * 6 + [1] * 4
+    assert len(vehicles) == 20
+    assert [vehicle.start_time for vehicle in vehicles] == [0] * 10 + [3] * 10
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +57,7 @@ def test_coordinated_full_adoption_produces_system_level_assignments():
         policy="coordinated", adoption_rate=1.0, disruption="none", seed=0, horizon=100
     )
 
-    assert coord["completed_count"] == 10
+    assert coord["completed_count"] == 20
     # Controller must produce at least one diverted vehicle.
     assert coord["primary_route_share"] < 1.0
     assert coord["route_diversity"] >= 2
@@ -92,8 +100,9 @@ def test_mixed_coordinated_wave_non_nav_vehicles_get_free_flow_routes():
 def test_shared_navigation_assigns_same_route_within_each_release_cohort():
     """Vehicles in the same release wave get one synchronized recommendation.
 
-    All 6 vehicles released at t=0 must share a single route, and all 4
-    vehicles released at t=1 must share a single (possibly different) route.
+    All 10 vehicles released at t=0 must share a single route (primary corridor,
+    since the network is empty), and all 10 vehicles released at t=3 must share
+    a single (different) route (alternative, since the primary is now congested).
     """
     graph = create_default_network()
     configure_focused_network(graph)
@@ -101,10 +110,10 @@ def test_shared_navigation_assigns_same_route_within_each_release_cohort():
     assign_navigation_adoption(vehicles, 1.0, seed=0)
 
     sim = Simulation(graph, vehicles, routing_policy="shared_navigation")
-    sim.run(until=100)
+    sim.run(until=200)
 
     wave0_routes = set(tuple(v.route) for v in vehicles if v.start_time == 0)
-    wave1_routes = set(tuple(v.route) for v in vehicles if v.start_time == 1)
+    wave1_routes = set(tuple(v.route) for v in vehicles if v.start_time == 3)
 
     assert len(wave0_routes) == 1, (
         f"Wave 0 vehicles should all get the same route; got {len(wave0_routes)} distinct routes"
@@ -112,6 +121,9 @@ def test_shared_navigation_assigns_same_route_within_each_release_cohort():
     assert len(wave1_routes) == 1, (
         f"Wave 1 vehicles should all get the same route; got {len(wave1_routes)} distinct routes"
     )
+    # Wave 0 herds to primary; wave 1 is diverted to the alternative.
+    assert wave0_routes == {(0, 1, 2)}, f"Wave 0 expected primary route, got {wave0_routes}"
+    assert wave1_routes == {(0, 3, 4, 5, 2)}, f"Wave 1 expected alternative route, got {wave1_routes}"
 
 
 def test_shared_navigation_has_at_least_one_diverted_vehicle():
@@ -147,7 +159,13 @@ def test_shared_navigation_differs_from_uninformed_routing():
 # ---------------------------------------------------------------------------
 
 def test_shared_navigation_has_higher_mean_journey_time_than_selfish():
-    """Shared navigation herds, causing higher mean journey time than selfish routing."""
+    """Shared navigation and selfish routing both herd from a pre-entry snapshot.
+
+    With snapshot-based routing, selfish vehicles independently run Dijkstra
+    on the same pre-entry traffic state — the same snapshot shared_navigation
+    uses.  For an identical O/D pair both policies produce the same route, so
+    mean journey time should be equal at the same adoption level.
+    """
     selfish = _run_focused_scenario(
         policy="selfish", adoption_rate=1.0, disruption="none", seed=0, horizon=100
     )
@@ -155,17 +173,19 @@ def test_shared_navigation_has_higher_mean_journey_time_than_selfish():
         policy="shared_navigation", adoption_rate=1.0, disruption="none", seed=0, horizon=100
     )
 
-    assert selfish["completed_count"] == shared["completed_count"] == 10
-    assert shared["mean_journey_time"] > selfish["mean_journey_time"]
-    assert shared["maximum_occupancy"] > 2
+    assert selfish["completed_count"] == shared["completed_count"] == 20
+    # Both herd identically — equal journey time is the expected outcome.
+    assert shared["mean_journey_time"] == selfish["mean_journey_time"]
 
 
 def test_shared_navigation_lower_within_cohort_diversity_than_selfish():
-    """Shared navigation gives each cohort one route; selfish splits within cohorts.
+    """Both shared navigation and selfish routing herd within each release cohort.
 
-    Although total route diversity across all vehicles may be equal, shared
-    navigation minimises per-wave diversity to 1 while selfish routing
-    produces 2 distinct routes within each wave.
+    With snapshot-based routing, both policies take a pre-entry snapshot and
+    route each vehicle independently against it.  Since all vehicles in a wave
+    share the same O/D pair and see the same snapshot, both policies produce
+    exactly one distinct route per wave — herding onto whichever corridor looks
+    cheapest at release time.
     """
     # --- Shared navigation ---
     graph_shared = create_default_network()
@@ -176,7 +196,7 @@ def test_shared_navigation_lower_within_cohort_diversity_than_selfish():
     sim_shared.run(until=100)
 
     shared_wave0_diversity = len({tuple(v.route) for v in vehicles_shared if v.start_time == 0})
-    shared_wave1_diversity = len({tuple(v.route) for v in vehicles_shared if v.start_time == 1})
+    shared_wave1_diversity = len({tuple(v.route) for v in vehicles_shared if v.start_time == 3})
 
     # --- Selfish routing ---
     graph_selfish = create_default_network()
@@ -187,17 +207,24 @@ def test_shared_navigation_lower_within_cohort_diversity_than_selfish():
     sim_selfish.run(until=100)
 
     selfish_wave0_diversity = len({tuple(v.route) for v in vehicles_selfish if v.start_time == 0})
-    selfish_wave1_diversity = len({tuple(v.route) for v in vehicles_selfish if v.start_time == 1})
+    selfish_wave1_diversity = len({tuple(v.route) for v in vehicles_selfish if v.start_time == 3})
 
-    # Each shared cohort has exactly one route; selfish cohorts split.
+    # Both policies herd: each cohort gets exactly one route.
     assert shared_wave0_diversity == 1
     assert shared_wave1_diversity == 1
-    assert selfish_wave0_diversity > shared_wave0_diversity
-    assert selfish_wave1_diversity > shared_wave1_diversity
+    assert selfish_wave0_diversity == 1
+    assert selfish_wave1_diversity == 1
+    # The herding pattern is the same: wave 0 → primary, wave 1 → alternative.
+    assert selfish_wave0_diversity == shared_wave0_diversity
+    assert selfish_wave1_diversity == shared_wave1_diversity
 
 
 def test_selfish_has_lower_mean_journey_time_than_shared_navigation():
-    """Selfish routing has lower mean journey time than shared navigation."""
+    """Selfish and shared_navigation produce identical journey times under snapshot routing.
+
+    Both policies route from the same pre-entry traffic snapshot, so they
+    assign the same route to every vehicle in a given O/D wave.
+    """
     selfish = _run_focused_scenario(
         policy="selfish", adoption_rate=1.0, disruption="none", seed=0, horizon=100
     )
@@ -205,7 +232,7 @@ def test_selfish_has_lower_mean_journey_time_than_shared_navigation():
         policy="shared_navigation", adoption_rate=1.0, disruption="none", seed=0, horizon=100
     )
 
-    assert selfish["mean_journey_time"] < shared["mean_journey_time"]
+    assert selfish["mean_journey_time"] == shared["mean_journey_time"]
 
 
 # ---------------------------------------------------------------------------

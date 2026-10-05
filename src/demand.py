@@ -137,14 +137,22 @@ def build_scheduled_corridor_demand(
 def build_staggered_corridor_demand(
     graph: nx.DiGraph,
     *,
-    first_wave: int = 6,
-    second_wave: int = 4,
+    first_wave: int = 10,
+    second_wave: int = 10,
     first_release: int = 0,
-    second_release: int = 1,
+    second_release: int = 3,
     origin: Any = DEFAULT_ORIGIN,
     destination: Any = DEFAULT_DESTINATION,
 ) -> list[Vehicle]:
-    """Build the focused presentation schedule: six vehicles, then four."""
+    """Build the focused presentation schedule: ten vehicles at step 0, then ten at step 3.
+
+    The gap of 3 steps between waves is large enough that navigation users in
+    wave 2 see a congested primary corridor (0→1→2) and herd onto the
+    alternative (0→3→4→5→2).  With both corridors capacity-constrained at 2,
+    herding at high adoption saturates whichever route is recommended.
+    The optimal adoption sits near 50%, where the nav-user cohort is small
+    enough to relieve primary congestion without flooding the alternative.
+    """
     return build_scheduled_corridor_demand(
         graph,
         {first_release: first_wave, second_release: second_wave},
