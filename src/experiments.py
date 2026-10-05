@@ -61,29 +61,39 @@ FOCUSED_POLICIES: tuple[str, ...] = (
 FOCUSED_ADOPTION_RATES: tuple[float, ...] = (0.0, 0.5, 1.0)
 FOCUSED_DISRUPTIONS: tuple[str, ...] = ("none", "capacity_reduction")
 FOCUSED_SEEDS = (0, 1, 2, 3, 4)
-FOCUSED_HORIZON = 100
+FOCUSED_HORIZON = 200
 FOCUSED_ALTERNATIVE_TRAVEL_TIME = 0.5
 
 
 def configure_focused_network(graph) -> Any:
     """Apply the focused scenario's capacity and live-choice calibration.
 
-    The topology and node layout stay unchanged.  The primary corridor
-    (edges 0→1, 1→0, 1→2, 2→1) is capacity-constrained at 2 so congestion
-    builds quickly.  The alternative entrance (edges 0→3, 3→0) is given a
-    very short free-flow travel time of 0.5 steps, making the complete
-    alternative path (0→3→2) approximately 4 free-flow steps — still longer
-    than the primary at free flow, but reachable as congestion rises.
+    The topology and node layout stay unchanged.  Both corridors are
+    capacity-constrained at 2 so that herding onto either route causes
+    congestion.  The primary corridor (0→1→2) has free-flow time 2 steps.
+    The alternative entrance (0→3) is given a very short free-flow travel
+    time of 0.5 steps, making the complete alternative path (0→3→4→5→2)
+    approximately 4.5 free-flow steps — still longer than the primary at
+    free flow, but reachable as primary congestion rises.
 
     This calibration ensures:
     - The primary route is preferred before congestion.
-    - Selfish users split route-by-route as occupancy rises.
-    - Shared navigation users all receive the same single snapshot-based
-      recommendation as a cohort, causing visible herding onto one route.
+    - At low adoption, the few nav users divert to the alternative, relieving
+      primary congestion slightly.
+    - At medium adoption (~50%), the split is near-optimal and mean journey
+      time is minimised.
+    - At high adoption (75–100%), nav users all herd onto the alternative
+      together (snapshot-based routing gives every nav vehicle the same
+      recommendation), saturating that route too and raising journey times
+      back toward the uninformed baseline.
     - Coordinated routing optimises only navigation users; non-navigation
       vehicles are fixed on free-flow routes.
     """
     for edge in ((0, 1), (1, 0), (1, 2), (2, 1)):
+        graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+    # Constrain the alternative corridor to the same capacity so herding
+    # onto it produces visible congestion.
+    for edge in ((0, 3), (3, 4), (4, 5), (5, 2)):
         graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
     for edge in ((0, 3), (3, 0)):
         graph[edge[0]][edge[1]]["free_flow_time"] = FOCUSED_ALTERNATIVE_TRAVEL_TIME
@@ -356,11 +366,14 @@ def _run_routing_scenario(
         policy, demand_level, adoption_rate, disruption, seed
     )
     graph = create_default_network()
-    # Calibrate only the experiment network: the top corridor is deliberately
-    # capacity-constrained while the lower corridor remains an available
-    # alternative. This makes route choice consequential without changing the
-    # baseline model or its validation fixtures.
+    # Calibrate the experiment network: both corridors are capacity-constrained
+    # so that herding onto either route produces visible congestion.
+    # The primary corridor (0→1→2) and the alternative (0→3→4→5→2) both use
+    # EXPERIMENT_PRIMARY_CAPACITY, making high adoption costly when all nav
+    # users flood the same route.
     for edge in ((0, 1), (1, 0), (1, 2), (2, 1)):
+        graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+    for edge in ((0, 3), (3, 4), (4, 5), (5, 2)):
         graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
     pristine = {
         (u, v): copy.deepcopy(attrs)

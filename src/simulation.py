@@ -16,8 +16,11 @@ does not advance the clock or change occupancy, routes, or completion.
 
 Entry auto-routing chooses Dijkstra weights from each vehicle's
 ``uses_navigation_app`` flag (free-flow vs live congested travel time). Routes
-are locked at entry; same-step due vehicles are still routed then entered in
-list order, so later selfish entrants can see earlier occupancy.
+are locked at entry. Under ``routing_policy="decentralized"``, navigation users
+in a releasing wave all route from a shared pre-entry traffic snapshot taken
+before any vehicle enters that step — so every nav user independently picks the
+same "best" route (herding). Non-navigation vehicles use static free-flow
+weights and are unaffected by the snapshot.
 
 When ``routing_policy="shared_navigation"`` is set, navigation users due on
 the same step are grouped by origin/destination and receive one route from a
@@ -295,34 +298,71 @@ class Simulation:
             self.active.append(vehicle)
 
     def _enter_due_vehicles_decentralized(self) -> None:
-        """Decentralized (selfish/uninformed) entry: route each vehicle independently."""
-        for vehicle in self.vehicles:
-            if vehicle in self._in_transit or vehicle in self.completed:
-                continue
-            if vehicle.start_time != self.current_step:
-                continue
+        """Decentralized (selfish) entry: all nav users route from a shared pre-entry snapshot.
 
+        Navigation users see the same frozen traffic snapshot taken before any
+        due vehicle enters this step.  Because every nav vehicle runs Dijkstra
+        on the same graph, they all independently pick the same "best" route
+        for a given O/D pair — producing a herding effect at high adoption
+        (everyone floods the currently-cheapest route together).  As adoption
+        rises, more vehicles herd onto the nav-recommended route and it becomes
+        congested, so the optimal adoption level sits somewhere in the middle.
+
+        Non-navigation vehicles are unaffected: they always use static
+        free-flow weights and are not sensitive to the snapshot.
+
+        Entry itself (occupancy updates) still happens in list order after all
+        routes are decided, so the physical simulation remains consistent.
+        """
+        due = [
+            vehicle
+            for vehicle in self.vehicles
+            if vehicle not in self._in_transit
+            and vehicle not in self.completed
+            and vehicle.start_time == self.current_step
+        ]
+        if not due:
+            return
+
+        # Freeze current_travel_time before any vehicle enters this step.
+        # All nav users route against this snapshot, producing herding.
+        snapshot: dict[tuple[Any, Any], float] = {
+            (u, v): attrs["current_travel_time"]
+            for u, v, attrs in self.graph.edges(data=True)
+        }
+
+        # Route all due vehicles using the snapshot (nav) or free-flow (non-nav).
+        for vehicle in due:
             if vehicle.route is None:
-                weight = (
-                    "current_travel_time"
-                    if vehicle.uses_navigation_app
-                    else "free_flow_time"
-                )
-                route = find_shortest_route(
-                    self.graph,
-                    vehicle.origin,
-                    vehicle.destination,
-                    weight=weight,
-                )
+                if vehicle.uses_navigation_app:
+                    # Build a lightweight weight-lookup so find_shortest_route
+                    # reads from the frozen snapshot rather than the live graph.
+                    snapshot_graph = self.graph.copy()
+                    for u, v in snapshot_graph.edges():
+                        snapshot_graph[u][v]["current_travel_time"] = snapshot[(u, v)]
+                    route = find_shortest_route(
+                        snapshot_graph,
+                        vehicle.origin,
+                        vehicle.destination,
+                        weight="current_travel_time",
+                    )
+                else:
+                    route = find_shortest_route(
+                        self.graph,
+                        vehicle.origin,
+                        vehicle.destination,
+                        weight="free_flow_time",
+                    )
                 vehicle.set_route(route, self.graph)
 
+        # Enter all due vehicles in order (occupancy updates happen here).
+        for vehicle in due:
             assert vehicle.route is not None
             if len(vehicle.route) < 2:
                 raise ValueError(
                     f"vehicle {vehicle.vehicle_id!r} route must contain at "
                     f"least two nodes, got {vehicle.route!r}"
                 )
-
             u, v = vehicle.route[0], vehicle.route[1]
             self._enter_edge(vehicle, u, v, route_idx=0)
             self.active.append(vehicle)
@@ -507,7 +547,7 @@ class Simulation:
         nav_ids = {v.vehicle_id for v in nav}
 
         # Determine a sub-simulation step limit: generous upper bound.
-        _SUB_SIM_LIMIT = max(200, 10 * len(releasing))
+        _SUB_SIM_LIMIT = max(500, 20 * len(releasing))
 
         best_assignment: list[list[Any]] | None = None
         best_total_time: float = float("inf")
