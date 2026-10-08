@@ -370,40 +370,32 @@ class Simulation:
     def _enter_due_vehicles_coordinated(self) -> None:
         """Coordinated entry: central controller assigns routes to minimize total journey time.
 
-        Only navigation users (``uses_navigation_app=True``) are eligible for
-        coordinated route optimisation. Non-navigation vehicles always receive
-        their uninformed free-flow shortest route and are entered first so
-        their occupancy is visible when the controller evaluates nav-user
-        candidates. Pre-assigned routes are preserved for both groups.
+        Every vehicle in the release wave is eligible for coordinated route
+        optimisation. The navigation-adoption rate belongs to the selfish
+        routing treatment; coordinated routing is a controller benchmark that
+        assigns routes to the full vehicle population at every adoption rate.
+        Pre-assigned routes are preserved.
 
-        If a release wave contains no navigation users the controller is
-        bypassed entirely and every vehicle is routed with uninformed
-        free-flow weights, matching the uninformed baseline exactly.
-
-        Algorithm for navigation users
+        Algorithm for all releasing vehicles
         --------------------------------
-        1. Collect all vehicles releasing this step.  Partition into
-           non-navigation and navigation sub-lists.
-        2. Enter non-navigation vehicles immediately using free-flow routing
-           (or their pre-assigned route).  Their occupancy is reflected in
-           the graph before the controller runs.
-        3. For each navigation vehicle, list all simple paths
+        1. Collect all vehicles releasing this step.
+        2. For each vehicle, list all simple paths
            (origin → destination).  Raise ``ValueError`` if none exist.
-        4. Sort each vehicle's paths: selfish path (Dijkstra on
+        3. Sort each vehicle's paths: selfish path (Dijkstra on
            ``current_travel_time``) at index 0, rest sorted lexicographically.
-        5. Enumerate all distributions of navigation vehicles over paths
+        4. Enumerate all distributions of vehicles over paths
            within each (origin, destination) group.  A distribution
            specifies how many vehicles take each path; vehicles are assigned
            in order (first ``c_0`` take path 0, next ``c_1`` take path 1, …).
-        6. The Cartesian product across groups must not exceed 32 768.
+        5. The Cartesian product across groups must not exceed 32 768.
            Raise ``ValueError`` if it does.
-        7. For each candidate global assignment, deep-copy the simulation,
+        6. For each candidate global assignment, deep-copy the simulation,
            pre-set routes, and run until all navigation vehicles complete.
            Raise ``ValueError`` if any releasing vehicle fails to complete.
-        8. Choose the assignment minimising the sum of journey times. Ties
+        7. Choose the assignment minimising the sum of journey times. Ties
            broken by: (a) maximise selfish-route agreement; (b) minimise the
            concatenated route node lists lexicographically.
-        9. Apply the chosen routes on the real navigation vehicle agents and
+        8. Apply the chosen routes on the real vehicle agents and
            enter them.
         """
         # --- 1. Collect releasing vehicles (preserve list order) ---
@@ -417,43 +409,10 @@ class Simulation:
         if not releasing:
             return
 
-        # Partition into non-navigation and navigation vehicles.
-        non_nav: list[Vehicle] = []
-        nav: list[Vehicle] = []
-        for vehicle in releasing:
-            if vehicle.uses_navigation_app:
-                nav.append(vehicle)
-            else:
-                non_nav.append(vehicle)
-
-        # --- 2. Enter non-navigation vehicles immediately using free-flow routes ---
-        for vehicle in non_nav:
-            if vehicle.route is None:
-                route = find_shortest_route(
-                    self.graph,
-                    vehicle.origin,
-                    vehicle.destination,
-                    weight="free_flow_time",
-                )
-                vehicle.set_route(route, self.graph)
-            assert vehicle.route is not None
-            if len(vehicle.route) < 2:
-                raise ValueError(
-                    f"vehicle {vehicle.vehicle_id!r} route must contain at "
-                    f"least two nodes, got {vehicle.route!r}"
-                )
-            u, v = vehicle.route[0], vehicle.route[1]
-            self._enter_edge(vehicle, u, v, route_idx=0)
-            self.active.append(vehicle)
-
-        # If no navigation users in this wave, bypass the controller entirely.
-        if not nav:
-            return
-
-        # --- 3 & 4. Per nav vehicle: all simple paths, sorted with selfish first ---
+        # --- 2 & 3. Per vehicle: all simple paths, sorted with selfish first ---
         selfish_routes: list[list[Any]] = []
         all_paths_per_vehicle: list[list[list[Any]]] = []
-        for vehicle in nav:
+        for vehicle in releasing:
             if vehicle.route is not None:
                 # Pre-set route: treat it as the only option.
                 selfish_routes.append(list(vehicle.route))
@@ -495,9 +454,9 @@ class Simulation:
             sorted_paths = [selfish] + others
             all_paths_per_vehicle.append(sorted_paths)
 
-        # --- 5. Group nav vehicles by (origin, destination) and build distributions ---
+        # --- 5. Group vehicles by (origin, destination) and build distributions ---
         od_groups: dict[tuple[Any, Any], list[int]] = {}
-        for idx, vehicle in enumerate(nav):
+        for idx, vehicle in enumerate(releasing):
             key = (vehicle.origin, vehicle.destination)
             od_groups.setdefault(key, []).append(idx)
 
@@ -543,12 +502,8 @@ class Simulation:
             group_paths.append(paths)
             group_distributions.append(_distributions(len(vid_indices), len(paths)))
 
-        # --- 7. Evaluate each global assignment (nav vehicles only) ---
-        nav_ids = {v.vehicle_id for v in nav}
-
-        # Determine a sub-simulation step limit: generous upper bound.
-        _SUB_SIM_LIMIT = max(500, 20 * len(releasing))
-
+        # --- 7. Evaluate each global assignment ---
+        releasing_ids = {v.vehicle_id for v in releasing}
         best_assignment: list[list[Any]] | None = None
         best_total_time: float = float("inf")
         best_selfish_agreement: int = -1
@@ -567,37 +522,32 @@ class Simulation:
                         assignment[vid_indices[pointer]] = paths[path_j]
                         pointer += 1
 
-            # Build the flattened route list in nav order.
-            assigned_routes: list[list[Any]] = [assignment[i] for i in range(len(nav))]
+            # Build the flattened route list in release order.
+            assigned_routes: list[list[Any]] = [assignment[i] for i in range(len(releasing))]
 
-            # Deep-copy the simulation (which already includes the entered non-nav
-            # vehicles with their occupancy) and pre-set nav vehicle routes.
             sim_copy = copy.deepcopy(self)
-            sim_copy.routing_policy = "decentralized"  # sub-sim uses decentralized
-            nav_copy_candidates = [
+            sim_copy.routing_policy = "decentralized"
+            copy_candidates = [
                 v for v in sim_copy.vehicles
-                if v.vehicle_id in nav_ids
+                if v.vehicle_id in releasing_ids
                 and v not in sim_copy._in_transit
                 and v not in sim_copy.completed
                 and v.start_time == sim_copy.current_step
             ]
-            id_to_copy: dict[Any, Vehicle] = {v.vehicle_id: v for v in nav_copy_candidates}
-            for i, real_vehicle in enumerate(nav):
+            id_to_copy = {v.vehicle_id: v for v in copy_candidates}
+            for i, real_vehicle in enumerate(releasing):
                 copy_vehicle = id_to_copy.get(real_vehicle.vehicle_id)
                 if copy_vehicle is not None:
                     copy_vehicle.set_route(assigned_routes[i], sim_copy.graph)
+            sim_copy.run(until=max(500, 20 * len(releasing)))
 
-            # Run sub-simulation until all nav vehicles complete.
-            sim_copy.run(until=_SUB_SIM_LIMIT)
-
-            # Collect journey times for nav vehicles only.
             total_time = 0.0
-            for real_vehicle in nav:
+            for real_vehicle in releasing:
                 copy_vehicle = id_to_copy.get(real_vehicle.vehicle_id)
                 if copy_vehicle is None or copy_vehicle.completion_time is None:
                     raise ValueError(
                         f"coordinated routing: vehicle {real_vehicle.vehicle_id!r} "
-                        f"did not complete within {_SUB_SIM_LIMIT} sub-simulation steps"
+                        "did not complete within the sub-simulation limit"
                     )
                 total_time += copy_vehicle.completion_time - copy_vehicle.start_time
 
@@ -627,8 +577,8 @@ class Simulation:
 
         assert best_assignment is not None
 
-        # --- 9. Apply chosen routes and enter nav vehicles ---
-        for vehicle, route in zip(nav, best_assignment):
+        # --- 9. Apply chosen routes and enter all releasing vehicles ---
+        for vehicle, route in zip(releasing, best_assignment):
             vehicle.set_route(route, self.graph)
             if len(vehicle.route) < 2:  # type: ignore[arg-type]
                 raise ValueError(

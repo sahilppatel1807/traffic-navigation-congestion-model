@@ -45,10 +45,10 @@ COMPARISON_HORIZON = 120
 # The baseline presets remain 1/5/15 vehicles, but the comparison experiment
 # uses a sustained finite demand period so vehicles overlap on the network.
 EXPERIMENT_DEMAND_LEVELS = {"low": 1, "medium": 5, "high": 10}
-DEMAND_RELEASE_END = 3
 WAVE_INTERVAL = 3
 DISRUPTION_STEP = 15
 RESTORE_STEP = 45
+DEMAND_RELEASE_END = 3
 EXPERIMENT_PRIMARY_CAPACITY = 2
 DISRUPTED_ROAD = (1, 2)
 REDUCED_CAPACITY_FACTOR = 0.5
