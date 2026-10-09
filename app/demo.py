@@ -39,6 +39,7 @@ from src.disruption import close_road, reduce_road_capacity
 from src.experiments import (
     EXPERIMENT_DEMAND_LEVELS,
     EXPERIMENT_PRIMARY_CAPACITY,
+    configure_focused_network,
 )
 from src.metrics import (
     completed_count,
@@ -94,15 +95,28 @@ def _build_scenario(
 ) -> Simulation:
     """Build one scene from the controls and return it at the opening frame."""
     graph = create_default_network()
-    for edge in ((0, 1), (1, 2)):
-        graph[edge[0]][edge[1]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
-        graph[edge[1]][edge[0]]["capacity"] = EXPERIMENT_PRIMARY_CAPACITY
+    configure_focused_network(graph)
+    # Keep the first edge visible for at least one rendered frame. The core
+    # simulation intentionally allows a one-step edge to be entered and
+    # completed in the same tick; the interactive demo needs a slower visual
+    # clock so vehicles do not appear to jump from node 0 to node 3.
+    for u, v in graph.edges():
+        if (u, v) in {
+            (0, 1), (1, 2), (0, 3), (3, 4), (4, 5), (5, 2),
+        }:
+            graph[u][v]["free_flow_time"] = 2.0
+            graph[u][v]["current_travel_time"] = 2.0
     vehicles = _DEMAND_BUILDERS[demand](graph)
     if policy == "Coordinated":
         rate = 1.0  # all vehicles are navigation users so the controller can route them
     else:
         rate = float(adoption)
     assign_navigation_adoption(vehicles, rate, seed=int(seed))
+    if policy == "Selfish":
+        navigation_route = [0, 3, 4, 5, 2]
+        for vehicle in vehicles:
+            if vehicle.uses_navigation_app:
+                vehicle.set_route(navigation_route, graph)
     if disruption == "Halve road 1–2":
         reduce_road_capacity(graph, 1, 2, factor=0.5)
     elif disruption == "Close road 1–2":
